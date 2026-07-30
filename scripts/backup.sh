@@ -196,7 +196,7 @@ create_database_backup() {
   case "${engine}" in
     mysql | percona)
       "${MANAGER[@]}" compose exec -T "${engine}" sh -c \
-        'MYSQL_PWD="$(cat "$MYSQL_ROOT_PASSWORD_FILE")" exec mysqldump -uroot --all-databases --single-transaction --routines --events' |
+        'MYSQL_PWD="$(cat "$MYSQL_ROOT_PASSWORD_FILE")" exec mysqldump -uroot --all-databases --single-transaction --routines --events --set-gtid-purged=OFF' |
         gzip -c >"${destination}/database-${engine}.sql.gz"
       ;;
     mariadb)
@@ -217,6 +217,18 @@ create_database_backup() {
     none) ;;
     *) fail "Unsupported database engine: ${engine}" ;;
   esac
+}
+
+create_apisix_backup() {
+  local destination="$1"
+
+  [[ "$(env_get "${ENV_FILE}" ENABLE_APISIX 0)" == "1" ]] || return 0
+  "${MANAGER[@]}" compose run --rm --no-deps \
+    --user "$(id -u):$(id -g)" \
+    --volume "${destination}:/backup" \
+    apisix-etcd \
+    /usr/local/bin/etcdctl --endpoints=http://apisix-etcd:2379 \
+    snapshot save /backup/apisix-etcd.snapshot.db >/dev/null
 }
 
 create_backup() {
@@ -256,7 +268,10 @@ create_backup() {
     -C "${DATA_DIR}" tomcat/webapps
   tar -czf "${PARTIAL_DIR}/ftp-state.tar.gz" \
     -C "${DATA_DIR}" ftp
+  tar -czf "${PARTIAL_DIR}/npm-state.tar.gz" \
+    -C "${DATA_DIR}" npm
   create_database_backup "${engine}" "${PARTIAL_DIR}"
+  create_apisix_backup "${PARTIAL_DIR}"
 
   {
     printf 'CREATED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -358,6 +373,41 @@ restore_managed_archive() {
   printf '[backup] Restored %s from %s\n' "${label}" "${file}"
 }
 
+restore_apisix() {
+  local file="${1:-}"
+  local confirmation="${2:-}"
+  local restore_file
+  local etcd_data="${DATA_DIR}/apisix/etcd"
+
+  [[ -f "${file}" ]] || fail "Backup file not found: ${file}"
+  [[ "${confirmation}" == "--yes" ]] ||
+    fail "APISIX restore replaces all gateway routes and state. Repeat with --yes."
+  verify_backup_file "${file}"
+  validate_backup_manifest "${file}"
+
+  restore_file="$(mktemp "${BACKUP_ROOT}/.apisix-restore.XXXXXX")"
+  trap 'rm -f "${restore_file}"' RETURN
+  stream_backup_file "${file}" >"${restore_file}"
+
+  "${MANAGER[@]}" compose stop apisix apisix-etcd >/dev/null 2>&1 || true
+  "${MANAGER[@]}" compose run --rm --no-deps \
+    --entrypoint /bin/rm \
+    --volume "${etcd_data}:/etcd-data" \
+    apisix -rf /etcd-data/member
+  chmod 0700 "${etcd_data}"
+  "${MANAGER[@]}" compose run --rm --no-deps \
+    --volume "${restore_file}:/snapshot.db:ro" \
+    apisix-etcd /usr/local/bin/etcdutl snapshot restore /snapshot.db \
+    --data-dir /etcd-data
+  rm -f "${restore_file}"
+  trap - RETURN
+
+  if [[ "$(env_get "${ENV_FILE}" ENABLE_APISIX 0)" == "1" ]]; then
+    "${MANAGER[@]}" compose up --detach apisix-etcd apisix
+  fi
+  printf '[backup] Restored APISIX state from %s\n' "${file}"
+}
+
 command="${1:-create}"
 if (($# > 0)); then shift; fi
 
@@ -375,5 +425,9 @@ case "${command}" in
   restore-ftp)
     restore_managed_archive "${1:-}" "${2:-}" "FTP state" "ftp"
     ;;
+  restore-npm)
+    restore_managed_archive "${1:-}" "${2:-}" "Nginx Proxy Manager state" "npm"
+    ;;
+  restore-apisix) restore_apisix "${1:-}" "${2:-}" ;;
   *) fail "Unknown backup command: ${command}" ;;
 esac

@@ -77,10 +77,12 @@ RUN set -eux; \
       gd \
       intl \
       mysqli \
-      opcache \
       pcntl \
       pdo_mysql \
-      zip
+      zip; \
+    if ! php -r 'exit(extension_loaded("Zend OPcache") ? 0 : 1);'; then \
+      docker-php-ext-install -j"$(nproc)" opcache; \
+    fi
 
 COPY install-extensions /usr/local/bin/oneinstack-install-php-extensions
 COPY custom /opt/oneinstack/php-custom

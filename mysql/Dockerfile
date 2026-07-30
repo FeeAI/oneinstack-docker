@@ -1,4 +1,4 @@
-ARG MYSQL_VERSION=8.4
+ARG MYSQL_VERSION=9.7
 FROM mysql:${MYSQL_VERSION}
 
 LABEL org.opencontainers.image.title="OneinStack MySQL"

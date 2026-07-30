@@ -1,5 +1,7 @@
 # Container capability matrix
 
+[English](CAPABILITIES.md) | [中文](CAPABILITIES.zh-CN.md)
+
 This matrix measures functional parity for responsibilities that belong inside
 a container deployment. Host SSH configuration, host firewall policy, distro
 package initialization and reboot control are intentionally excluded: running
@@ -11,29 +13,28 @@ are repeated inside an image.
 | Area | Implementation status | Notes |
 | --- | --- | --- |
 | Stack selection and installation | Implemented | Transactional selection, local builds, health checks and Compose profiles |
-| Web servers, virtual hosts and proxies | Implemented | Nginx, Tengine, OpenResty, Caddy, Apache; PHP/static/Node/Tomcat/custom proxy sites |
-| Database families and administration | Implemented | MySQL, MariaDB, Percona, PostgreSQL, MongoDB; phpMyAdmin and Adminer |
-| PHP, multi-PHP, extensions and Composer | Implemented with gaps | PHP 8.2-8.5, parallel FPM, Composer, selectable extensions, pinned extra PECL and private binary hooks |
-| Java/Tomcat and Node.js | Implemented | Tomcat 9/10/11, Temurin 8/11/17/21/25, guarded user-supplied Oracle JDK 8u202 and Node.js |
+| Web servers, virtual hosts and proxies | Implemented | Nginx, Tengine, OpenResty, Caddy, Apache, UI-managed Nginx Proxy Manager and APISIX API Gateway; PHP/static/Node/Tomcat/custom proxy sites |
+| Database families and administration | Implemented | MySQL 8.4/9.7 LTS, MariaDB, Percona, PostgreSQL, MongoDB; phpMyAdmin and Adminer |
+| PHP, multi-PHP, extensions and Composer | Implemented with gaps | Currently supported PHP 8.2-8.5 branches, parallel FPM, Composer, selectable extensions, pinned extra PECL and private binary hooks |
+| Java/Tomcat and Node.js | Implemented | Tomcat 9/10/11 on Docker Official Image variants for maintained Temurin 8/11/17/21/25 LTS lines, plus Node.js |
 | Redis, Memcached and Pure-FTPd | Implemented | Persistent Redis, isolated Memcached and FTPS virtual users |
 | TLS certificate lifecycle | Implemented with external acceptance | Caddy automatic HTTPS, Certbot HTTP-01, renewal, self-signed certificates, FTPS reload and host systemd timer |
-| Backup and restore | Implemented | Web, configuration, Tomcat, FTP and all database families; atomic checksummed sets, optional age encryption and rclone copies |
+| Backup and restore | Implemented | Web, configuration, Tomcat, NPM, APISIX etcd snapshots, FTP and all database families; atomic checksummed sets, optional age encryption and rclone copies |
 | Upgrade, uninstall and daily management | Implemented | Build/update, health waits, safe down/purge and separately confirmed marker-guarded data purge |
 | Security and diagnostics | Implemented with external acceptance | Shared internal backend, isolated runtime egress, file secrets, resource/PID ceilings, log rotation, TLS-first FTP and health checks |
 
 ## Deliberate gaps
 
-- PHP 5.3-8.1, Tomcat 6-8 and old database releases are not presented as
-  maintained choices after their upstream security support or usable official
-  image lines ended.
+- End-of-life PHP, Tomcat and database releases are not presented as maintained
+  choices. PHP follows php.net's supported branches, MySQL accepts LTS tracks
+  only, and open-source JDK choices follow Temurin LTS availability.
 - Proprietary PHP loaders are not redistributed. ABI-matched vendor modules can
   be supplied through `php/custom`; their licensing remains the deployer's
   responsibility. Gmagick is not built in because its latest PECL release is
   still a release candidate.
-- Oracle JDK 8u202 is never downloaded or committed. The deployer must provide
-  the authenticated Linux x64 archive, accept the BCL, pin its SHA-256 and
-  independently assess redistribution and unpatched-runtime risks. Temurin is
-  the default JDK vendor.
+- JDK distributions without a maintained upstream container image are not
+  offered. Maintained Temurin LTS lines remain available, with Temurin 25 as
+  the default JDK.
 - Certbot HTTP-01 and Caddy automatic HTTPS are implemented. Provider-specific
   DNS challenge plugins are not configured by the manager.
 - Backups can be copied to any configured rclone remote, but there is no
@@ -50,11 +51,11 @@ acceptance evidence below.
 ## Validation status
 
 Shell syntax, ShellCheck, Compose rendering, build contexts, configuration
-transactions, site rendering, secret generation, explicit host data-root
+transactions, site rendering, NPM and APISIX startup, secret generation, explicit host data-root
 initialization, backup archive restore and local lifecycle behavior have been
 checked. `tests/runtime.sh` defines the Docker Linux default-stack acceptance
-and `.github/workflows/docker.yml` runs it in CI. Until that workflow passes,
+and `.github/workflows/ci.yml` runs it in CI. Until that workflow passes,
 image builds and service startup remain unaccepted. Database restore,
-encrypted age restore, systemd timer activation, FTPS transfer, optional stack
-families, Oracle JDK image build and public ACME issuance still require scoped
-Docker-enabled Linux acceptance.
+encrypted age restore, systemd timer activation, FTPS transfer, other optional
+stack families and public ACME issuance still require scoped Docker-enabled
+Linux acceptance.

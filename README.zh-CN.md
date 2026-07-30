@@ -1,25 +1,26 @@
 # OneinStack Docker
 
 [English](README.md) | [中文](README.zh-CN.md) |
-[能力矩阵](CAPABILITIES.md)
+[Capability matrix](CAPABILITIES.md) | [能力矩阵](CAPABILITIES.zh-CN.md)
 
-此目录提供 OneinStack 的容器化运行路径，不改变仓库根目录原有的宿主机源码
-安装流程。已实现范围、明确缺口和当前运行时验收状态见
-[CAPABILITIES.md](CAPABILITIES.md)。
+本项目是 [OneinStack 源码安装项目](https://github.com/FeeAI/oneinstack)
+对应的独立 Docker Compose 版本。已实现范围、明确缺口和当前运行时验收
+状态见 [CAPABILITIES.zh-CN.md](CAPABILITIES.zh-CN.md)。
 
 ## 支持范围
 
-- Web：Nginx、Tengine、OpenResty、Caddy、Apache
+- Web：Nginx、Tengine、OpenResty、Caddy、Apache、Nginx Proxy Manager
 - 数据库：MySQL、MariaDB、Percona、PostgreSQL、MongoDB
 - 运行时：PHP 8.2-8.5、多 PHP、Composer、Node.js、Tomcat 9/10/11
-- Java：Eclipse Temurin 8/11/17/21/25、用户自备 Oracle JDK 8u202
-- 辅助服务：Redis、Memcached、phpMyAdmin、Adminer、TLS 优先的 Pure-FTPd
+- Java：仍受维护的 Eclipse Temurin 8/11/17/21/25 LTS
+- 辅助服务：Apache APISIX、Redis、Memcached、phpMyAdmin、Adminer、TLS 优先的 Pure-FTPd
 - 运维：虚拟主机、反向代理、TLS、备份恢复、健康检查、升级和清理
 
 ## 快速开始
 
 ```bash
-cd docker
+git clone https://github.com/FeeAI/oneinstack-docker.git
+cd oneinstack-docker
 ./oneinstack init
 # 或指定其他宿主机绝对路径：
 ./oneinstack init --data-dir /srv/oneinstack
@@ -28,10 +29,10 @@ cd docker
 ./oneinstack up
 ```
 
-默认栈为 Nginx + PHP 8.4 + MySQL 8.4。未提供 `--data-dir` 时，初始化使用
-管理脚本旁的 `docker/data`。初始化同时生成权限为 `0600` 的 `.env`、
+默认栈为 Nginx + PHP 8.4 + MySQL 9.7 LTS。未提供 `--data-dir` 时，初始化使用
+管理脚本旁的 `data`。初始化同时生成权限为 `0600` 的 `.env`、
 `secrets/` 下权限为 `0600` 的随机密钥文件以及托管目录标记，不会覆盖已有
-配置。生成的四个 `*_PASSWORD_FILE` 是明确的密钥来源配置项，服务密码值
+配置。生成的 `*_FILE` 是明确的服务密钥来源配置项，密钥值
 不再以内联明文保存在 `.env`。
 
 ## 选择服务
@@ -39,13 +40,17 @@ cd docker
 `configure` 事务式更新 `.env`，全部组合校验通过后才会替换原配置：
 
 ```bash
-./oneinstack configure --web openresty --db mysql:8.0
+./oneinstack configure --web openresty --db mysql:9.7
+./oneinstack configure --web npm
 ./oneinstack configure --db mariadb
 ./oneinstack configure --web caddy --db postgresql --enable adminer
 ./oneinstack configure --php 8.5 \
   --extensions imagick,redis,memcached,mongodb,pgsql,swoole
-./oneinstack configure --enable cache,node,tomcat
-./oneinstack configure --tomcat 10.1 --jdk 21 --node 22
+./oneinstack configure --redis 8.8 --memcached 1.6
+./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+./oneinstack configure --apisix 3.17.0-debian
+./oneinstack configure --enable node,tomcat
+./oneinstack configure --tomcat 10.1 --jdk 25 --node 22
 ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 ./oneinstack configure --disable memcached,tomcat
 ```
@@ -54,7 +59,8 @@ cd docker
 不指定版本时保留 `.env` 现有值：
 
 ```bash
-./oneinstack configure --db mysql:8.0       # 写入 MYSQL_VERSION=8.0
+./oneinstack configure --db mysql:8.4       # 选择较旧的受支持 LTS
+./oneinstack configure --db mysql:9.7       # 选择当前 LTS
 ./oneinstack configure --db mariadb:11.8    # 写入 MARIADB_VERSION=11.8
 ./oneinstack configure --db mysql           # 保留当前 MYSQL_VERSION
 ```
@@ -62,6 +68,18 @@ cd docker
 `percona`、`postgresql`、`mongodb` 同样支持该格式；例如
 `postgresql:17` 会写入 `POSTGRES_VERSION=17`，PostgreSQL 构建器会自动选择
 Alpine 变体。版本值只能使用 Docker tag 安全字符。
+MySQL 有意限制为仍受支持的 `8.4.x` 和 `9.7.x`
+[LTS 轨道](https://dev.mysql.com/doc/refman/8.4/en/mysql-releases.html)；旧版本和
+短周期 Innovation 标签会被拒绝。
+
+Redis、Memcached、phpMyAdmin、Adminer 和 APISIX 通过各自的专用选项设置镜像
+版本。指定其中任一选项时也会自动启用对应服务：
+
+```bash
+./oneinstack configure --redis 8.8 --memcached 1.6
+./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+./oneinstack configure --apisix 3.17.0-debian
+```
 
 修改选择后执行 `./oneinstack up`，Compose 会构建并重建需要的服务。
 
@@ -74,9 +92,10 @@ Alpine 变体。版本值只能使用 Docker tag 安全字符。
                          \-> egress -> 外部 API
 ```
 
-- Nginx、Tengine、OpenResty、Caddy、Apache 加入 `frontend + backend`。
+- Nginx、Tengine、OpenResty、Caddy、Apache、Nginx Proxy Manager、APISIX 加入
+  `frontend + backend`。
 - PHP、Node.js、Tomcat 加入 `backend + egress`。
-- 数据库、Redis、Memcached 只加入内部 `backend`。
+- 数据库、Redis、Memcached 和 APISIX 的 etcd 只加入内部 `backend`。
 - `php:9000`、`tomcat:8080`、`mysql:3306` 等内部连接不经过宿主机端口和
   NAT 回环。
 
@@ -114,6 +133,10 @@ printf '%s\n' 'new-redis-password' | ./oneinstack secret set redis --stdin
 `--after-rotation` 更新文件，并重建受影响容器以重新挂载新密钥。
 
 ## 多 PHP
+
+只提供 [php.net 当前支持的分支](https://www.php.net/supported-versions.php)。
+截至 2026 年 8 月为 PHP 8.2-8.5；8.2 和 8.3 仅接收安全修复，8.4 和
+8.5 仍在主动支持期。停止支持的分支会被移除，不作为“兼容选项”保留。
 
 主 PHP 由 `configure --php` 选择。额外 PHP-FPM 可以并行运行：
 
@@ -164,36 +187,27 @@ SQL Server 驱动会同时安装 `sqlsrv`、`pdo_sqlsrv` 和 Microsoft ODBC 18�
 INI 放入 `php/custom/conf.d/`。二进制必须匹配 PHP 版本、NTS、CPU 架构和
 libc；构建过程会拒绝产生 PHP startup error 的模块。
 
-## Java 与 Oracle JDK 8u202
+## Java 与 Tomcat
 
-Java 默认使用 Temurin，支持矩阵如下：
+Java 默认使用开源 LTS 发行版 Temurin 25，但它不是唯一仍受维护的选择。
+[Adoptium 路线图](https://adoptium.net/support/) 仍将 Temurin 8、11、17、21、25
+列为可用 LTS。支持组合遵循 Tomcat 的 Java 最低版本要求：
 
-| Tomcat | JDK |
+| Tomcat | 受维护的 JDK 选择 |
 | --- | --- |
-| 9.0 | 8、11、17、21、25 |
-| 10.1 | 11、17、21、25 |
-| 11.0 | 17、21、25 |
+| 9.0 | Temurin 8、11、17、21、25 |
+| 10.1 | Temurin 11、17、21、25 |
+| 11.0 | Temurin 17、21、25 |
 
-Oracle JDK 8u202 仅作为要求固定厂商版本的 Linux AMD64 兼容路径。
-OneinStack 不下载、不提交 Oracle 安装包。使用者需要通过有权限的 Oracle
-账号下载、审阅 BCL，并将文件放在
-`tomcat/oracle/jdk-8u202-linux-x64.tar.gz`，然后计算 SHA-256：
+需要仍受维护的 Java 8 时，可直接选择 Temurin 8。它使用上游 Tomcat Docker
+Official Image：
 
 ```bash
-./oneinstack configure \
-  --tomcat 9.0 \
-  --jdk 8 \
-  --jdk-vendor oracle \
-  --oracle-jdk8-sha256 SHA256 \
-  --accept-oracle-bcl
-./oneinstack doctor
+./oneinstack configure --tomcat 9.0 --jdk 8
 ./oneinstack build tomcat
 ```
 
-归档文件已被 Git 忽略，构建时会验证 SHA-256 和实际 Java 版本。Oracle
-将 8u202 定义为缺少后续安全补丁的归档版本，不建议用于生产。发布包含
-Oracle JDK 的公共镜像前，发布者必须自行确认满足 BCL；持续安全更新的
-Temurin 8 仍是默认选择。
+不提供缺少持续维护上游容器镜像来源的 JDK 发行版。Temurin 25 保持默认。
 
 ## 站点和反向代理
 
@@ -235,6 +249,36 @@ challenge 插件尚未由统一入口配置。证书签发或续期后，管理�
 在 systemd 宿主机上，`timer-install` 会安装带随机延迟、持久化的每日两次
 续期任务。任务调用本管理入口的 `tls renew`，不会向容器挂载 Docker Socket。
 
+[Nginx Proxy Manager](https://nginxproxymanager.com/guide/) 是独立的
+UI 管理型 Web 引擎：
+
+```bash
+./oneinstack configure --web npm
+./oneinstack up
+# 打开 http://127.0.0.1:81
+```
+
+它使用官方 SQLite 最小部署，将 `/data` 和 `/etc/letsencrypt` 持久化到
+`npm/`。代理主机和证书由 NPM 管理界面维护；`site` 和基于 Certbot 的
+`tls issue` 不会伪装能修改 NPM 内部数据库。镜像版本与仅监听回环地址的
+管理端口可通过 `NPM_VERSION`、`NPM_ADMIN_BIND`、`NPM_ADMIN_PORT` 调整。
+
+[Apache APISIX](https://apisix.apache.org/docs/docker/manual/) 是可与任意 Web
+引擎并行启用的 API Gateway：
+
+```bash
+./oneinstack configure --enable apisix
+./oneinstack up
+# Dashboard：http://127.0.0.1:9180/ui/
+```
+
+Gateway HTTP/HTTPS 默认监听 `9080`/`9443`。Dashboard 与 Admin API 共用
+`9180`，默认仅绑定回环地址，并要求使用 `APISIX_ADMIN_KEY_FILE` 指向的
+Admin API 密钥。APISIX 采用 traditional 模式和仅在后端网络可见的 etcd，
+通过 Admin API 或内置 Dashboard 建立的路由持久化到 `apisix/etcd`。它是
+API Gateway，不替代 PHP 虚拟主机；上游可指向共享后端网络中的
+`nginx:80`、`node:3000`、`tomcat:8080` 等现有服务。
+
 ## 数据库与工具
 
 ```bash
@@ -262,9 +306,13 @@ phpMyAdmin 仅允许 MySQL、MariaDB、Percona；Adminer 可用于其他关系�
   data/backups/TIMESTAMP/tomcat-webapps.tar.gz --yes
 ./oneinstack backup restore-ftp \
   data/backups/TIMESTAMP/ftp-state.tar.gz --yes
+./oneinstack backup restore-npm \
+  data/backups/TIMESTAMP/npm-state.tar.gz --yes
+./oneinstack backup restore-apisix \
+  data/backups/TIMESTAMP/apisix-etcd.snapshot.db --yes
 ```
 
-备份包含网站、站点配置、Tomcat webapps、FTP 虚拟用户状态和当前数据库。
+备份包含网站、站点配置、Tomcat webapps、NPM 状态、FTP 虚拟用户状态和当前数据库。
 MySQL、MariaDB、Percona、PostgreSQL 生成 `database-数据库类型.sql.gz`
 压缩 SQL；MongoDB 生成 `database-mongodb.archive.gz` 压缩归档。数据库
 恢复会拒绝 manifest 引擎与当前数据库不一致的备份。远端复制要求宿主机已
@@ -272,6 +320,10 @@ MySQL、MariaDB、Percona、PostgreSQL 生成 `database-数据库类型.sql.gz`
 都保留 `backups/`。本地备份默认保留 180 天，可通过 `.env` 的
 `BACKUP_RETENTION_DAYS` 调整。180 天是统一运营基线，不能替代特定国家、
 地区或行业的保留期限要求。
+
+启用 APISIX 后，创建备份要求其 etcd 服务健康，并通过 `etcdctl` 生成一致性
+快照。`restore-apisix` 会替换全部 Gateway 路由和状态、重启 APISIX，因此必须
+显式提供 `--yes`。
 
 创建备份时会先取得互斥锁，在隐藏的临时目录生成数据、完成标记和
 `SHA256SUMS`，全部成功后通过一次原子重命名提交正式时间戳目录；远端复制
@@ -336,7 +388,7 @@ FTP 使用虚拟用户，不创建宿主机账号。默认 `required` 模式强�
 ./oneinstack purge --yes
 ```
 
-只有以下命令才清理数据库、Redis、Caddy 状态和 FTP 凭据：
+只有以下命令才清理数据库、Redis、Caddy、NPM、APISIX 状态和 FTP 凭据：
 
 ```bash
 ./oneinstack purge --data --yes
@@ -347,7 +399,7 @@ FTP 使用虚拟用户，不创建宿主机账号。默认 `required` 模式强�
 
 ## 数据位置
 
-默认根目录为 `docker/data`，也可在初始化时指定：
+默认根目录为 `data`，也可在初始化时指定：
 
 ```bash
 ./oneinstack init --data-dir /data/oneinstack
@@ -357,15 +409,15 @@ FTP 使用虚拟用户，不创建宿主机账号。默认 `required` 模式强�
 
 - 网站、证书、ACME、日志、站点和备份：`www/`、`certs/`、`acme/`、
   `logs/`、`sites/`、`backups/`
-- 数据库和 Redis 默认密钥文件：`secrets/`，文件权限为 `0600`
+- 服务默认密钥文件：`secrets/`，文件权限为 `0600`
 - Web 生成配置：`config/`
 - 数据库：`mysql/`、`mariadb/`、`percona/`、`postgresql/`、`mongodb/`
-- 其他状态：`redis/`、`caddy/`、`ftp/`、`tomcat/webapps/`
+- 其他状态：`redis/`、`caddy/`、`npm/`、`apisix/etcd/`、`ftp/`、`tomcat/webapps/`
 
 所有持久数据都使用明确的宿主机 bind mount，不再使用 Docker named
 volume。`./oneinstack show-config` 会显示当前宿主机数据根目录。
 
-`.env` 中四个 `*_PASSWORD_FILE` 配置项也可以指向默认 `secrets/` 之外的
+`.env` 中的服务密钥 `*_FILE` 配置项也可以指向默认 `secrets/` 之外的
 受保护路径，例如由宿主机密钥管理系统提供的文件。对于已有的外部托管文件，
 工具不会修改文件及其父目录的所有者或权限；部署方需确保配置的 `APP_UID`
 具备读取权限。

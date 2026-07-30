@@ -1,5 +1,5 @@
 ARG TOMCAT_VERSION=11.0
-ARG JDK_VERSION=21
+ARG JDK_VERSION=25
 FROM tomcat:${TOMCAT_VERSION}-jdk${JDK_VERSION}-temurin
 
 LABEL org.opencontainers.image.title="OneinStack Tomcat"

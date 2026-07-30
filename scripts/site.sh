@@ -267,6 +267,8 @@ add_site() {
   local temporary_file
 
   [[ -n "${domain}" ]] || fail "Usage: site add DOMAIN [options]"
+  [[ "$(env_get "${ENV_FILE}" WEB_ENGINE nginx)" != "npm" ]] ||
+    fail "Nginx Proxy Manager sites are managed through its admin UI."
   shift
   validate_domain "${domain}"
   root="${domain}"
@@ -368,6 +370,10 @@ list_sites() {
 
 render_all() {
   local file
+  if [[ "$(env_get "${ENV_FILE}" WEB_ENGINE nginx)" == "npm" ]]; then
+    printf '[site] Nginx Proxy Manager sites are managed through its admin UI.\n'
+    return 0
+  fi
   for file in "${METADATA_DIR}"/*.env; do
     [[ -f "${file}" ]] || continue
     render_site "$(env_get "${file}" DOMAIN)"

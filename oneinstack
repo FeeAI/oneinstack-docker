@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly PROGRAM_NAME="oneinstack"
-readonly PROGRAM_VERSION="2.4.0"
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROGRAM_NAME="oneinstack"
+PROGRAM_VERSION="$(<"${SCRIPT_DIR}/VERSION")"
+readonly PROGRAM_NAME PROGRAM_VERSION
 DEFAULT_DATA_DIR="${ONEINSTACK_DEFAULT_DATA_DIR:-${SCRIPT_DIR}/data}"
 ENV_FILE="${ONEINSTACK_ENV_FILE:-${SCRIPT_DIR}/.env}"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
@@ -73,15 +74,14 @@ Commands:
   compose ARGS...       Pass arguments directly to Docker Compose
 
 Configure examples:
-  ./oneinstack configure --web openresty --db mysql:8.0
+  ./oneinstack configure --web openresty --db mysql:9.7
   ./oneinstack configure --db mariadb
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
   ./oneinstack configure --extensions sqlsrv --accept-microsoft-eula
   ./oneinstack configure --pecl-extra uuid@uuid-1.3.0
   ./oneinstack configure --enable cache,tomcat,phpmyadmin
   ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
-  ./oneinstack configure --tomcat 9.0 --jdk 8 --jdk-vendor oracle \
-    --oracle-jdk8-sha256 SHA256 --accept-oracle-bcl
+  ./oneinstack configure --tomcat 9.0 --jdk 8
   ./oneinstack configure --disable memcached,tomcat
 
 Examples:
@@ -95,6 +95,43 @@ Examples:
   ./oneinstack secret set database --file /secure/db-password
   ./oneinstack backup create
   ./oneinstack logs nginx php
+EOF
+}
+
+show_configure_help() {
+  cat <<'EOF'
+Configure the OneinStack Docker deployment
+
+Usage:
+  ./oneinstack configure [options]
+
+Options:
+  --web ENGINE                 nginx, tengine, openresty, caddy, apache, npm or none
+  --db ENGINE[:VERSION]        mysql, mariadb, percona, postgresql, mongodb or none
+  --php VERSION                Primary PHP version: 8.2, 8.3, 8.4 or 8.5
+  --extensions LIST            Comma-separated maintained PHP extensions or none
+  --pecl-extra LIST            MODULE@PACKAGE-VERSION entries or none
+  --accept-microsoft-eula      Accept the EULA required by sqlsrv
+  --enable LIST                Enable optional features
+  --disable LIST               Disable optional features
+  --redis VERSION              Enable Redis at an image version
+  --memcached VERSION          Enable Memcached at an image version
+  --node VERSION               Enable a Node.js major version
+  --tomcat VERSION             Enable Tomcat 9.0, 10.1 or 11.0
+  --jdk VERSION                Select Temurin LTS 8, 11, 17, 21 or 25
+  --phpmyadmin VERSION         Enable phpMyAdmin at an image version
+  --adminer VERSION            Enable Adminer at an image version
+  --apisix VERSION             Enable Apache APISIX at an image version
+  --ftp-tls-mode MODE          required, optional or off
+  --ftp-tls-domain DOMAIN      Certificate domain used by the FTP service
+  -h, --help                   Show this help
+
+Optional features:
+  redis, memcached, cache, node, tomcat, phpmyadmin, adminer, apisix, ftp
+
+Database versions:
+  A VERSION suffix overrides the matching value in .env. Without a suffix,
+  the existing version is preserved. MySQL accepts LTS 8.4 or 9.7 only.
 EOF
 }
 
@@ -196,6 +233,7 @@ ensure_secret_file() {
   local filename="$1"
   local legacy_key="$2"
   local path_key="$3"
+  local missing_policy="${4:-fail}"
   local secrets_directory
   local secret_file
   local legacy_value
@@ -218,8 +256,12 @@ ensure_secret_file() {
   fi
 
   legacy_value="$(env_get "${ENV_FILE}" "${legacy_key}")"
-  [[ -n "${legacy_value}" && "${legacy_value}" != change-me-* ]] ||
-    fail "Secret is missing: ${secret_file}"
+  if [[ -z "${legacy_value}" || "${legacy_value}" == change-me-* ]]; then
+    [[ "${missing_policy}" == "generate" ]] ||
+      fail "Secret is missing: ${secret_file}"
+    legacy_value="$(random_secret)"
+    log "Generated missing ${filename} secret at ${secret_file}"
+  fi
   printf '%s' "${legacy_value}" >"${secret_file}"
   secure_secret_permissions "${secret_file}"
   env_set "${ENV_FILE}" "${legacy_key}" ""
@@ -231,6 +273,7 @@ ensure_secret_files() {
   ensure_secret_file mysql_root_password MYSQL_ROOT_PASSWORD MYSQL_ROOT_PASSWORD_FILE
   ensure_secret_file mongodb_root_password MONGODB_ROOT_PASSWORD MONGODB_ROOT_PASSWORD_FILE
   ensure_secret_file redis_password REDIS_PASSWORD REDIS_PASSWORD_FILE
+  ensure_secret_file apisix_admin_key APISIX_ADMIN_KEY APISIX_ADMIN_KEY_FILE generate
 }
 
 secret_path() {
@@ -320,7 +363,10 @@ secret_name_to_fields() {
     redis | redis-password)
       printf '%s\n' 'redis_password|REDIS_PASSWORD|REDIS_PASSWORD_FILE'
       ;;
-    *) fail "Unknown secret name: $1 (use database, mysql-root, mongodb-root or redis)." ;;
+    apisix | apisix-admin | apisix-admin-key)
+      printf '%s\n' 'apisix_admin_key|APISIX_ADMIN_KEY|APISIX_ADMIN_KEY_FILE'
+      ;;
+    *) fail "Unknown secret name: $1 (use database, mysql-root, mongodb-root, redis or apisix)." ;;
   esac
 }
 
@@ -339,6 +385,7 @@ secret_in_use() {
       ;;
     mongodb_root_password) directories=(mongodb) ;;
     redis_password) directories=(redis) ;;
+    apisix_admin_key) directories=(apisix/etcd) ;;
     *) return 1 ;;
   esac
   for item in "${directories[@]}"; do
@@ -387,7 +434,7 @@ manage_secrets() {
 
   case "${action}" in
     list | status)
-      for name in database mysql-root mongodb-root redis; do
+      for name in database mysql-root mongodb-root redis apisix; do
         fields="$(secret_name_to_fields "${name}")"
         IFS='|' read -r filename legacy_key path_key <<<"${fields}"
         destination="$(secret_path "${filename}" "${path_key}")"
@@ -525,6 +572,7 @@ initialize() {
   fi
   mkdir -p \
     "${host_data_dir}/acme/.well-known/acme-challenge" \
+    "${host_data_dir}/apisix/etcd" \
     "${host_data_dir}/backups" \
     "${host_data_dir}/caddy/config" \
     "${host_data_dir}/caddy/data" \
@@ -541,6 +589,8 @@ initialize() {
     "${host_data_dir}/mariadb" \
     "${host_data_dir}/mongodb" \
     "${host_data_dir}/mysql" \
+    "${host_data_dir}/npm/data" \
+    "${host_data_dir}/npm/letsencrypt" \
     "${host_data_dir}/percona" \
     "${host_data_dir}/postgresql" \
     "${host_data_dir}/redis" \
@@ -577,6 +627,7 @@ initialize() {
   database_password="$(random_secret)"
   redis_password="$(random_secret)"
   mongodb_root_password="$(random_secret)"
+  apisix_admin_key="$(random_secret)"
   app_uid="${SUDO_UID:-$(id -u)}"
   app_gid="${SUDO_GID:-$(id -g)}"
   [[ "${app_uid}" != "0" ]] || app_uid=1000
@@ -585,7 +636,9 @@ initialize() {
   printf '%s' "${mysql_root_password}" >"${host_data_dir}/secrets/mysql_root_password"
   printf '%s' "${mongodb_root_password}" >"${host_data_dir}/secrets/mongodb_root_password"
   printf '%s' "${redis_password}" >"${host_data_dir}/secrets/redis_password"
+  printf '%s' "${apisix_admin_key}" >"${host_data_dir}/secrets/apisix_admin_key"
   chmod 0700 "${host_data_dir}/secrets"
+  chmod 0700 "${host_data_dir}/apisix/etcd"
   chmod 0600 "${host_data_dir}/secrets/"*
   if ((EUID == 0)); then
     chown -R "${app_uid}:${app_gid}" \
@@ -611,6 +664,7 @@ initialize() {
       /^MYSQL_ROOT_PASSWORD_FILE=/ { print "MYSQL_ROOT_PASSWORD_FILE=" data_dir "/secrets/mysql_root_password"; next }
       /^MONGODB_ROOT_PASSWORD_FILE=/ { print "MONGODB_ROOT_PASSWORD_FILE=" data_dir "/secrets/mongodb_root_password"; next }
       /^REDIS_PASSWORD_FILE=/ { print "REDIS_PASSWORD_FILE=" data_dir "/secrets/redis_password"; next }
+      /^APISIX_ADMIN_KEY_FILE=/ { print "APISIX_ADMIN_KEY_FILE=" data_dir "/secrets/apisix_admin_key"; next }
       { print }
     ' "${SCRIPT_DIR}/.env.example" >"${temporary_file}"
 
@@ -679,16 +733,6 @@ doctor() {
     fi
   fi
 
-  if [[ -f "${ENV_FILE}" ]] &&
-    [[ "$(env_get "${ENV_FILE}" ENABLE_TOMCAT 0)" == "1" ]] &&
-    [[ "$(env_get "${ENV_FILE}" JDK_VENDOR temurin)" == "oracle" ]]; then
-    if oracle_jdk_artifact_valid; then
-      log "Oracle JDK 8u202 archive: checksum verified"
-    else
-      failed=1
-    fi
-  fi
-
   return "${failed}"
 }
 
@@ -709,6 +753,28 @@ database_version_key() {
     mongodb) printf '%s\n' MONGODB_VERSION ;;
     *) return 1 ;;
   esac
+}
+
+validate_image_tag() {
+  local value="$1"
+  local label="$2"
+
+  if [[ ! "${value}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
+    ((${#value} > 128)); then
+    fail "${label} must be a valid Docker image tag."
+  fi
+}
+
+validate_supported_php_version() {
+  case "$1" in
+    8.2 | 8.3 | 8.4 | 8.5) ;;
+    *) fail "Supported PHP versions are 8.2, 8.3, 8.4 and 8.5." ;;
+  esac
+}
+
+validate_mysql_lts_version() {
+  [[ "$1" =~ ^(8\.4|9\.7)(\.[0-9]+)?(-[A-Za-z0-9._-]+)?$ ]] ||
+    fail "MySQL must use a supported LTS 8.4.x or 9.7.x image tag."
 }
 
 selected_database_version() {
@@ -782,6 +848,7 @@ set_feature_flag() {
     tomcat) env_set "${ENV_FILE}" ENABLE_TOMCAT "${value}" ;;
     phpmyadmin) env_set "${ENV_FILE}" ENABLE_PHPMYADMIN "${value}" ;;
     adminer) env_set "${ENV_FILE}" ENABLE_ADMINER "${value}" ;;
+    apisix) env_set "${ENV_FILE}" ENABLE_APISIX "${value}" ;;
     ftp) env_set "${ENV_FILE}" ENABLE_FTP "${value}" ;;
     *) fail "Unknown optional feature: ${feature}" ;;
   esac
@@ -828,6 +895,8 @@ sync_profiles() {
     profiles="$(csv_add "${profiles}" tools-adminer)"
   [[ "$(env_get "${ENV_FILE}" ENABLE_FTP 0)" == "1" ]] &&
     profiles="$(csv_add "${profiles}" ftp)"
+  [[ "$(env_get "${ENV_FILE}" ENABLE_APISIX 0)" == "1" ]] &&
+    profiles="$(csv_add "${profiles}" feature-apisix)"
 
   additional_php="$(env_get "${ENV_FILE}" ADDITIONAL_PHP)"
   IFS=','
@@ -852,18 +921,24 @@ configure_stack() {
   local php_extensions=""
   local enable_features=""
   local disable_features=""
+  local redis_version=""
+  local memcached_version=""
   local tomcat_version=""
   local jdk_version=""
-  local jdk_vendor=""
   local node_version=""
-  local oracle_jdk8_archive=""
-  local oracle_jdk8_sha256=""
-  local accept_oracle_bcl=0
+  local phpmyadmin_version=""
+  local adminer_version=""
+  local apisix_version=""
   local ftp_tls_mode=""
   local ftp_tls_domain=""
   local extra_pecl_packages=""
   local extra_pecl_packages_set=0
   local accept_microsoft_eula=0
+
+  if (($# == 1)) && [[ "$1" =~ ^(-h|--help)$ ]]; then
+    show_configure_help
+    return 0
+  fi
 
   require_env_file
   original_env_file="${ENV_FILE}"
@@ -887,18 +962,13 @@ configure_stack() {
       --accept-microsoft-eula) accept_microsoft_eula=1; shift ;;
       --enable) enable_features="${2:?--enable requires a comma-separated list}"; shift 2 ;;
       --disable) disable_features="${2:?--disable requires a comma-separated list}"; shift 2 ;;
+      --redis) redis_version="${2:?--redis requires a version}"; shift 2 ;;
+      --memcached) memcached_version="${2:?--memcached requires a version}"; shift 2 ;;
       --tomcat) tomcat_version="${2:?--tomcat requires a version}"; shift 2 ;;
       --jdk) jdk_version="${2:?--jdk requires a version}"; shift 2 ;;
-      --jdk-vendor) jdk_vendor="${2:?--jdk-vendor requires temurin or oracle}"; shift 2 ;;
-      --oracle-jdk8-archive)
-        oracle_jdk8_archive="${2:?--oracle-jdk8-archive requires a filename}"
-        shift 2
-        ;;
-      --oracle-jdk8-sha256)
-        oracle_jdk8_sha256="${2:?--oracle-jdk8-sha256 requires a checksum}"
-        shift 2
-        ;;
-      --accept-oracle-bcl) accept_oracle_bcl=1; shift ;;
+      --phpmyadmin) phpmyadmin_version="${2:?--phpmyadmin requires a version}"; shift 2 ;;
+      --adminer) adminer_version="${2:?--adminer requires a version}"; shift 2 ;;
+      --apisix) apisix_version="${2:?--apisix requires a version}"; shift 2 ;;
       --ftp-tls-mode) ftp_tls_mode="${2:?--ftp-tls-mode requires a value}"; shift 2 ;;
       --ftp-tls-domain) ftp_tls_domain="${2:?--ftp-tls-domain requires a domain}"; shift 2 ;;
       --node) node_version="${2:?--node requires a version}"; shift 2 ;;
@@ -907,8 +977,8 @@ configure_stack() {
   done
 
   if [[ -n "${web}" ]]; then
-    [[ "${web}" =~ ^(nginx|tengine|openresty|caddy|apache|none)$ ]] ||
-      fail "Web engine must be nginx, tengine, openresty, caddy, apache or none."
+    [[ "${web}" =~ ^(nginx|tengine|openresty|caddy|apache|npm|none)$ ]] ||
+      fail "Web engine must be nginx, tengine, openresty, caddy, apache, npm or none."
     env_set "${ENV_FILE}" WEB_ENGINE "${web}"
   fi
 
@@ -918,16 +988,15 @@ configure_stack() {
       database_version="${database_spec#*:}"
       [[ -n "${database_version}" ]] ||
         fail "Database version must not be empty."
-      if [[ ! "${database_version}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
-        ((${#database_version} > 128)); then
-        fail "Database version must be a valid Docker image tag."
-      fi
+      validate_image_tag "${database_version}" "Database version"
     fi
     [[ "${database}" =~ ^(mysql|mariadb|percona|postgresql|mongodb|none)$ ]] ||
       fail "Database must be mysql, mariadb, percona, postgresql, mongodb or none."
     if [[ -n "${database_version}" ]]; then
       version_key="$(database_version_key "${database}")" ||
         fail "Database 'none' does not accept a version."
+      [[ "${database}" != "mysql" ]] ||
+        validate_mysql_lts_version "${database_version}"
       env_set "${ENV_FILE}" "${version_key}" "${database_version}"
     fi
     env_set "${ENV_FILE}" DATABASE_ENGINE "${database}"
@@ -952,8 +1021,7 @@ configure_stack() {
   fi
 
   if [[ -n "${php_version}" ]]; then
-    [[ "${php_version}" =~ ^8\.[2-5]$ ]] ||
-      fail "The maintained PHP container builder supports PHP 8.2 through 8.5."
+    validate_supported_php_version "${php_version}"
     env_set "${ENV_FILE}" PHP_VERSION "${php_version}"
     env_set "${ENV_FILE}" PHP_VARIANT fpm-bookworm
   fi
@@ -981,6 +1049,18 @@ configure_stack() {
   [[ -z "${enable_features}" ]] || apply_feature_list "${enable_features}" 1
   [[ -z "${disable_features}" ]] || apply_feature_list "${disable_features}" 0
 
+  if [[ -n "${redis_version}" ]]; then
+    validate_image_tag "${redis_version}" "Redis version"
+    env_set "${ENV_FILE}" REDIS_VERSION "${redis_version}"
+    env_set "${ENV_FILE}" ENABLE_REDIS 1
+  fi
+
+  if [[ -n "${memcached_version}" ]]; then
+    validate_image_tag "${memcached_version}" "Memcached version"
+    env_set "${ENV_FILE}" MEMCACHED_VERSION "${memcached_version}"
+    env_set "${ENV_FILE}" ENABLE_MEMCACHED 1
+  fi
+
   if [[ -n "${tomcat_version}" ]]; then
     [[ "${tomcat_version}" =~ ^(9\.0|10\.1|11\.0)$ ]] ||
       fail "Maintained Tomcat container lines are 9.0, 10.1 and 11.0."
@@ -990,36 +1070,26 @@ configure_stack() {
 
   if [[ -n "${jdk_version}" ]]; then
     [[ "${jdk_version}" =~ ^(8|11|17|21|25)$ ]] ||
-      fail "JDK must be 8, 11, 17, 21 or 25."
+      fail "JDK must be a maintained Temurin LTS: 8, 11, 17, 21 or 25."
     env_set "${ENV_FILE}" JDK_VERSION "${jdk_version}"
   fi
 
-  if [[ -n "${jdk_vendor}" ]]; then
-    [[ "${jdk_vendor}" =~ ^(temurin|oracle)$ ]] ||
-      fail "JDK vendor must be temurin or oracle."
-    env_set "${ENV_FILE}" JDK_VENDOR "${jdk_vendor}"
-    if [[ "${jdk_vendor}" == "oracle" ]]; then
-      env_set "${ENV_FILE}" TOMCAT_DOCKERFILE Dockerfile.oracle8
-    else
-      env_set "${ENV_FILE}" TOMCAT_DOCKERFILE Dockerfile
-    fi
+  if [[ -n "${phpmyadmin_version}" ]]; then
+    validate_image_tag "${phpmyadmin_version}" "phpMyAdmin version"
+    env_set "${ENV_FILE}" PHPMYADMIN_VERSION "${phpmyadmin_version}"
+    env_set "${ENV_FILE}" ENABLE_PHPMYADMIN 1
   fi
 
-  if [[ -n "${oracle_jdk8_archive}" ]]; then
-    [[ "${oracle_jdk8_archive}" == "jdk-8u202-linux-x64.tar.gz" ]] ||
-      fail "The supported Oracle archive is jdk-8u202-linux-x64.tar.gz."
-    env_set "${ENV_FILE}" ORACLE_JDK8_ARCHIVE "${oracle_jdk8_archive}"
+  if [[ -n "${adminer_version}" ]]; then
+    validate_image_tag "${adminer_version}" "Adminer version"
+    env_set "${ENV_FILE}" ADMINER_VERSION "${adminer_version}"
+    env_set "${ENV_FILE}" ENABLE_ADMINER 1
   fi
 
-  if [[ -n "${oracle_jdk8_sha256}" ]]; then
-    [[ "${oracle_jdk8_sha256}" =~ ^[0-9A-Fa-f]{64}$ ]] ||
-      fail "Oracle JDK SHA-256 must contain exactly 64 hexadecimal characters."
-    env_set "${ENV_FILE}" ORACLE_JDK8_SHA256 \
-      "$(printf '%s' "${oracle_jdk8_sha256}" | tr '[:upper:]' '[:lower:]')"
-  fi
-
-  if ((accept_oracle_bcl == 1)); then
-    env_set "${ENV_FILE}" ORACLE_JDK8_ACCEPT_BCL Y
+  if [[ -n "${apisix_version}" ]]; then
+    validate_image_tag "${apisix_version}" "APISIX version"
+    env_set "${ENV_FILE}" APISIX_VERSION "${apisix_version}"
+    env_set "${ENV_FILE}" ENABLE_APISIX 1
   fi
 
   if [[ -n "${ftp_tls_mode}" ]]; then
@@ -1169,8 +1239,7 @@ manage_php_runtime() {
 
   case "${action}" in
     add)
-      [[ "${version}" =~ ^8\.[2-5]$ ]] ||
-        fail "Additional PHP runtime must be 8.2, 8.3, 8.4 or 8.5."
+      validate_supported_php_version "${version}"
       [[ "${version}" != "${main_version}" ]] ||
         fail "PHP ${version} is already the primary runtime."
       if [[ "${version}" == "8.2" ]] &&
@@ -1182,7 +1251,7 @@ manage_php_runtime() {
       sync_profiles
       ;;
     remove | delete)
-      [[ "${version}" =~ ^8\.[2-5]$ ]] || fail "A PHP version is required."
+      validate_supported_php_version "${version}"
       runtimes="$(csv_remove "${runtimes}" "${version}")"
       env_set "${ENV_FILE}" ADDITIONAL_PHP "${runtimes}"
       sync_profiles
@@ -1196,53 +1265,34 @@ manage_php_runtime() {
 }
 
 validate_runtime_selection() {
+  local additional_php
+  local php_runtime
   local tomcat_version
   local jdk_version
-  local jdk_vendor
   local database
   local ftp_tls_mode
   local ftp_tls_domain
 
   tomcat_version="$(env_get "${ENV_FILE}" TOMCAT_VERSION 11.0)"
-  jdk_version="$(env_get "${ENV_FILE}" JDK_VERSION 21)"
-  jdk_vendor="$(env_get "${ENV_FILE}" JDK_VENDOR temurin)"
+  jdk_version="$(env_get "${ENV_FILE}" JDK_VERSION 25)"
   database="$(selected_database_service)"
   validate_managed_data_dir
+  validate_supported_php_version "$(env_get "${ENV_FILE}" PHP_VERSION)"
+  additional_php="$(env_get "${ENV_FILE}" ADDITIONAL_PHP)"
+  while IFS= read -r php_runtime; do
+    [[ -n "${php_runtime}" ]] || continue
+    validate_supported_php_version "${php_runtime}"
+  done < <(tr ',' '\n' <<<"${additional_php}")
   validate_php_extension_selection
+  [[ "${database}" != "mysql" ]] ||
+    validate_mysql_lts_version "$(env_get "${ENV_FILE}" MYSQL_VERSION)"
 
-  case "${tomcat_version}" in
-    11.0)
-      [[ "${jdk_version}" =~ ^(17|21|25)$ ]] ||
-        fail "Tomcat 11 requires JDK 17, 21 or 25."
+  case "${tomcat_version}:${jdk_version}" in
+    9.0:8 | 9.0:11 | 9.0:17 | 9.0:21 | 9.0:25 | \
+      10.1:11 | 10.1:17 | 10.1:21 | 10.1:25 | \
+      11.0:17 | 11.0:21 | 11.0:25)
       ;;
-    10.1)
-      [[ "${jdk_version}" =~ ^(11|17|21|25)$ ]] ||
-        fail "Tomcat 10 requires JDK 11 or newer."
-      ;;
-    9.0)
-      [[ "${jdk_version}" =~ ^(8|11|17|21|25)$ ]] ||
-        fail "Tomcat 9 requires JDK 8 or newer."
-      ;;
-  esac
-
-  case "${jdk_vendor}" in
-    temurin)
-      [[ "$(env_get "${ENV_FILE}" TOMCAT_DOCKERFILE Dockerfile)" == "Dockerfile" ]] ||
-        fail "Temurin builds must use TOMCAT_DOCKERFILE=Dockerfile."
-      ;;
-    oracle)
-      [[ "${tomcat_version}" == "9.0" && "${jdk_version}" == "8" ]] ||
-        fail "Oracle JDK 8u202 is supported only with Tomcat 9.0 and JDK 8."
-      [[ "$(env_get "${ENV_FILE}" TOMCAT_DOCKERFILE)" == "Dockerfile.oracle8" ]] ||
-        fail "Oracle JDK 8u202 must use Dockerfile.oracle8."
-      [[ "$(env_get "${ENV_FILE}" ORACLE_JDK8_ARCHIVE)" == "jdk-8u202-linux-x64.tar.gz" ]] ||
-        fail "Oracle JDK 8u202 requires the official Linux x64 archive filename."
-      [[ "$(env_get "${ENV_FILE}" ORACLE_JDK8_SHA256)" =~ ^[0-9a-f]{64}$ ]] ||
-        fail "Oracle JDK 8u202 requires its SHA-256 checksum."
-      [[ "$(env_get "${ENV_FILE}" ORACLE_JDK8_ACCEPT_BCL N)" == "Y" ]] ||
-        fail "Oracle JDK 8u202 requires explicit BCL acceptance."
-      ;;
-    *) fail "JDK vendor must be temurin or oracle." ;;
+    *) fail "Temurin ${jdk_version} does not meet the Java requirement for Tomcat ${tomcat_version}." ;;
   esac
 
   ftp_tls_mode="$(env_get "${ENV_FILE}" FTP_TLS_MODE required)"
@@ -1265,52 +1315,11 @@ validate_runtime_selection() {
   fi
 }
 
-oracle_jdk_artifact_valid() {
-  local archive
-  local archive_path
-  local expected_sha256
-  local actual_sha256
-
-  archive="$(env_get "${ENV_FILE}" ORACLE_JDK8_ARCHIVE)"
-  expected_sha256="$(env_get "${ENV_FILE}" ORACLE_JDK8_SHA256)"
-  archive_path="${SCRIPT_DIR}/tomcat/oracle/${archive}"
-
-  if [[ ! -f "${archive_path}" ]]; then
-    printf '[%s] Missing Oracle JDK archive: %s\n' \
-      "${PROGRAM_NAME}" "${archive_path}" >&2
-    return 1
-  fi
-
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual_sha256="$(sha256sum "${archive_path}" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual_sha256="$(shasum -a 256 "${archive_path}" | awk '{print $1}')"
-  else
-    printf '[%s] Missing SHA-256 utility (sha256sum or shasum).\n' \
-      "${PROGRAM_NAME}" >&2
-    return 1
-  fi
-
-  if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
-    printf '[%s] Oracle JDK archive SHA-256 mismatch.\n' "${PROGRAM_NAME}" >&2
-    return 1
-  fi
-}
-
-require_runtime_artifacts() {
-  if [[ "$(env_get "${ENV_FILE}" ENABLE_TOMCAT 0)" == "1" ]] &&
-    [[ "$(env_get "${ENV_FILE}" JDK_VENDOR temurin)" == "oracle" ]]; then
-    oracle_jdk_artifact_valid ||
-      fail "Provide the account-authenticated Oracle JDK 8u202 archive before building."
-  fi
-}
-
 require_full_stack_artifacts() {
   local certificate_dir
   local ftp_tls_domain
   local ftp_tls_mode
 
-  require_runtime_artifacts
   [[ "$(env_get "${ENV_FILE}" ENABLE_FTP 0)" == "1" ]] || return 0
   ftp_tls_mode="$(env_get "${ENV_FILE}" FTP_TLS_MODE required)"
   [[ "${ftp_tls_mode}" != "off" ]] || return 0
@@ -1377,6 +1386,9 @@ selected_stack_services() {
   [[ "$(env_get "${ENV_FILE}" ENABLE_PHPMYADMIN 0)" == "1" ]] && printf '%s\n' phpmyadmin
   [[ "$(env_get "${ENV_FILE}" ENABLE_ADMINER 0)" == "1" ]] && printf '%s\n' adminer
   [[ "$(env_get "${ENV_FILE}" ENABLE_FTP 0)" == "1" ]] && printf '%s\n' ftp
+  if [[ "$(env_get "${ENV_FILE}" ENABLE_APISIX 0)" == "1" ]]; then
+    printf '%s\n' apisix-etcd apisix
+  fi
 
   additional_php="$(env_get "${ENV_FILE}" ADDITIONAL_PHP)"
   IFS=','
@@ -1447,9 +1459,8 @@ show_selected_config() {
     "$(env_get "${ENV_FILE}" PHP_VERSION)" \
     "$(env_get "${ENV_FILE}" PHP_EXTENSIONS)"
   printf 'Extra PECL:       %s\n' "${extra_pecl}"
-  printf 'Tomcat/JDK:       %s / %s %s (enabled=%s)\n' \
+  printf 'Tomcat/JDK:       %s / Temurin %s (enabled=%s)\n' \
     "$(env_get "${ENV_FILE}" TOMCAT_VERSION)" \
-    "$(env_get "${ENV_FILE}" JDK_VENDOR temurin)" \
     "$(env_get "${ENV_FILE}" JDK_VERSION)" \
     "$(env_get "${ENV_FILE}" ENABLE_TOMCAT 0)"
   printf 'Node.js:          %s (enabled=%s)\n' \
@@ -1463,6 +1474,11 @@ show_selected_config() {
     "$(env_get "${ENV_FILE}" ENABLE_FTP 0)" \
     "$(env_get "${ENV_FILE}" FTP_TLS_MODE required)" \
     "$(env_get "${ENV_FILE}" FTP_TLS_DOMAIN -)"
+  printf 'APISIX:           %s (version=%s, admin=%s:%s)\n' \
+    "$(env_get "${ENV_FILE}" ENABLE_APISIX 0)" \
+    "$(env_get "${ENV_FILE}" APISIX_VERSION)" \
+    "$(env_get "${ENV_FILE}" APISIX_ADMIN_BIND 127.0.0.1)" \
+    "$(env_get "${ENV_FILE}" APISIX_ADMIN_PORT 9180)"
   printf 'Host data:        %s\n' "$(data_dir)"
   printf 'Networks:         frontend + shared backend + runtime egress\n'
   printf 'Profiles:         %s\n' "$(env_get "${ENV_FILE}" COMPOSE_PROFILES)"
@@ -1491,6 +1507,9 @@ reload_web() {
       ;;
     apache)
       run_compose exec apache sh -c 'httpd -t && httpd -k graceful'
+      ;;
+    npm)
+      run_compose restart npm
       ;;
     none) fail "No web server is selected." ;;
   esac
@@ -1582,6 +1601,8 @@ manage_tls() {
         fail "Usage: tls issue DOMAIN EMAIL"
       [[ "$(selected_web_service)" != "caddy" ]] ||
         fail "Caddy manages ACME certificates automatically; add the site with TLS mode auto."
+      [[ "$(selected_web_service)" != "npm" ]] ||
+        fail "Nginx Proxy Manager manages certificates through its admin UI."
       render_site_if_present "${domain}"
       run_compose run --rm certbot certonly \
         --webroot \
@@ -1595,12 +1616,20 @@ manage_tls() {
       restart_ftp_if_running
       ;;
     renew)
+      [[ "$(selected_web_service)" != "npm" ]] ||
+        fail "Nginx Proxy Manager renews certificates through its admin UI."
       run_compose run --rm certbot renew
       "${SCRIPT_DIR}/scripts/site.sh" "${ENV_FILE}" render-all
       reload_web_if_running
       restart_ftp_if_running
       ;;
-    timer-install | timer-status | timer-remove)
+    timer-install)
+      [[ "$(selected_web_service)" != "npm" ]] ||
+        fail "Nginx Proxy Manager renews certificates through its admin UI."
+      "${SCRIPT_DIR}/scripts/cert-renew-timer.sh" \
+        "${action#timer-}" "${SCRIPT_DIR}/oneinstack" "${ENV_FILE}"
+      ;;
+    timer-status | timer-remove)
       "${SCRIPT_DIR}/scripts/cert-renew-timer.sh" \
         "${action#timer-}" "${SCRIPT_DIR}/oneinstack" "${ENV_FILE}"
       ;;
@@ -1624,24 +1653,30 @@ purge_managed_data() {
   rm -rf -- \
     "${directory}/caddy/config" \
     "${directory}/caddy/data" \
+    "${directory}/apisix/etcd" \
     "${directory}/ftp" \
     "${directory}/mariadb" \
     "${directory}/mongodb" \
     "${directory}/mysql" \
+    "${directory}/npm" \
     "${directory}/percona" \
     "${directory}/postgresql" \
     "${directory}/redis"
   mkdir -p \
     "${directory}/caddy/config" \
     "${directory}/caddy/data" \
+    "${directory}/apisix/etcd" \
     "${directory}/ftp" \
     "${directory}/mariadb" \
     "${directory}/mongodb" \
     "${directory}/mysql" \
+    "${directory}/npm/data" \
+    "${directory}/npm/letsencrypt" \
     "${directory}/percona" \
     "${directory}/postgresql" \
     "${directory}/redis"
-  log "Purged managed database, cache, Caddy and FTP data under ${directory}"
+  chmod 0700 "${directory}/apisix/etcd"
+  log "Purged managed database, cache, Caddy, NPM, APISIX and FTP data under ${directory}"
   log "Website, certificates, configuration, logs and backups were preserved."
 }
 
@@ -1685,7 +1720,11 @@ fi
 
 case "${subcommand}" in
   help)
-    show_help
+    case "${1:-}" in
+      "") show_help ;;
+      configure) show_configure_help ;;
+      *) fail "Unknown help topic: $1" ;;
+    esac
     ;;
   init)
     initialize "$@"
@@ -1709,13 +1748,11 @@ case "${subcommand}" in
   build)
     require_env_file
     validate_runtime_selection
-    require_runtime_artifacts
     run_compose build --pull "$@"
     ;;
   up)
     require_env_file
     validate_runtime_selection
-    require_runtime_artifacts
     if (($# == 0)); then
       require_full_stack_artifacts
       start_selected_dependencies build
@@ -1736,7 +1773,6 @@ case "${subcommand}" in
   update)
     require_env_file
     validate_runtime_selection
-    require_runtime_artifacts
     if (($# == 0)); then
       require_full_stack_artifacts
     fi

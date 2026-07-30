@@ -1,26 +1,27 @@
 # OneinStack Docker
 
 [English](README.md) | [中文](README.zh-CN.md) |
-[Capability matrix](CAPABILITIES.md)
+[Capability matrix](CAPABILITIES.md) | [能力矩阵](CAPABILITIES.zh-CN.md)
 
-This directory provides a service-oriented container deployment without
-changing the host source installer in the repository root. See
+This is the standalone Docker Compose companion to the
+[OneinStack source installer](https://github.com/FeeAI/oneinstack). See
 [CAPABILITIES.md](CAPABILITIES.md) for implemented areas, deliberate gaps and
 the current runtime acceptance status.
 
 ## Supported stack
 
-- Web: Nginx, Tengine, OpenResty, Caddy and Apache
+- Web: Nginx, Tengine, OpenResty, Caddy, Apache and Nginx Proxy Manager
 - Databases: MySQL, MariaDB, Percona, PostgreSQL and MongoDB
 - Runtimes: PHP 8.2-8.5, parallel PHP-FPM, Composer, Node.js and Tomcat 9-11
-- Java: Eclipse Temurin 8/11/17/21/25 and user-supplied Oracle JDK 8u202
-- Services: Redis, Memcached, phpMyAdmin, Adminer and TLS-first Pure-FTPd
+- Java: maintained Eclipse Temurin 8/11/17/21/25 LTS lines
+- Services: Apache APISIX, Redis, Memcached, phpMyAdmin, Adminer and TLS-first Pure-FTPd
 - Operations: sites, proxies, TLS, backup/restore, health checks and upgrades
 
 ## Quick start
 
 ```bash
-cd docker
+git clone https://github.com/FeeAI/oneinstack-docker.git
+cd oneinstack-docker
 ./oneinstack init
 # Or choose another absolute host path:
 ./oneinstack init --data-dir /srv/oneinstack
@@ -29,24 +30,28 @@ cd docker
 ./oneinstack up
 ```
 
-The default is Nginx + PHP 8.4 + MySQL 8.4. `init` uses `docker/data` beside the
+The default is Nginx + PHP 8.4 + MySQL 9.7 LTS. `init` uses `data` beside the
 manager script unless `--data-dir` is supplied. Initialization creates a mode
 `0600` `.env`, mode `0600` random secret files under the selected data root, and
 a managed-data marker; it never overwrites an existing environment file. The
-generated `*_PASSWORD_FILE` entries in `.env` are the explicit configuration
-for the four secret sources; service password values are not stored inline in
+generated secret-file entries in `.env` are the explicit configuration for
+service credentials; secret values are not stored inline in
 `.env`.
 
 ## Select the stack
 
 ```bash
-./oneinstack configure --web openresty --db mysql:8.0
+./oneinstack configure --web openresty --db mysql:9.7
+./oneinstack configure --web npm
 ./oneinstack configure --db mariadb
 ./oneinstack configure --web caddy --db postgresql --enable adminer
 ./oneinstack configure --php 8.5 \
   --extensions imagick,redis,memcached,mongodb,pgsql,swoole
-./oneinstack configure --enable cache,node,tomcat
-./oneinstack configure --tomcat 10.1 --jdk 21 --node 22
+./oneinstack configure --redis 8.8 --memcached 1.6
+./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+./oneinstack configure --apisix 3.17.0-debian
+./oneinstack configure --enable node,tomcat
+./oneinstack configure --tomcat 10.1 --jdk 25 --node 22
 ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 ./oneinstack configure --disable memcached,tomcat
 ./oneinstack up
@@ -59,7 +64,8 @@ unchanged.
 image version in `.env`; omitting it preserves the existing `.env` value:
 
 ```bash
-./oneinstack configure --db mysql:8.0       # sets MYSQL_VERSION=8.0
+./oneinstack configure --db mysql:8.4       # selects the older supported LTS
+./oneinstack configure --db mysql:9.7       # selects the current LTS
 ./oneinstack configure --db mariadb:11.8    # sets MARIADB_VERSION=11.8
 ./oneinstack configure --db mysql           # keeps the current MYSQL_VERSION
 ```
@@ -67,6 +73,18 @@ image version in `.env`; omitting it preserves the existing `.env` value:
 The same form applies to `percona`, `postgresql` and `mongodb`; for example,
 `postgresql:17` sets `POSTGRES_VERSION=17` (the PostgreSQL builder adds its
 Alpine variant). Version values must use Docker-tag-safe characters.
+MySQL is intentionally restricted to the supported `8.4.x` and `9.7.x`
+[LTS tracks](https://dev.mysql.com/doc/refman/8.4/en/mysql-releases.html);
+old and short-lived Innovation tags are rejected.
+
+Redis, Memcached, phpMyAdmin, Adminer and APISIX accept image versions through their
+dedicated options. Supplying one of these options also enables that service:
+
+```bash
+./oneinstack configure --redis 8.8 --memcached 1.6
+./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+./oneinstack configure --apisix 3.17.0-debian
+```
 
 ## Shared service networks
 
@@ -77,9 +95,10 @@ Internet -> Web -> backend -> PHP / Node / Tomcat -> database / cache
                          \-> runtime egress -> external APIs
 ```
 
-- Nginx, Tengine, OpenResty, Caddy and Apache join `frontend` and `backend`.
+- Nginx, Tengine, OpenResty, Caddy, Apache, Nginx Proxy Manager and APISIX join
+  `frontend` and `backend`.
 - PHP, Node.js and Tomcat join `backend` and the outbound-only `egress` bridge.
-- Databases, Redis and Memcached join only the internal `backend` bridge.
+- Databases, Redis, Memcached and APISIX's etcd join only the internal `backend` bridge.
 - Internal service ports such as `php:9000`, `tomcat:8080` and `mysql:3306`
   are never routed through published host ports.
 
@@ -122,6 +141,11 @@ inside the running database first, then repeat with `--after-rotation` and
 recreate the affected containers so the new secret mount is active.
 
 ## Multiple PHP runtimes
+
+Only branches listed by [php.net as currently supported](https://www.php.net/supported-versions.php)
+are offered. As of August 2026 these are PHP 8.2-8.5; 8.2 and 8.3 receive
+security fixes only, while 8.4 and 8.5 remain in active support. End-of-life
+branches are removed instead of being preserved as legacy choices.
 
 ```bash
 ./oneinstack php-runtime add 8.2
@@ -172,38 +196,29 @@ ABI-compatible licensed or private modules can be placed in
 The build rejects PHP startup errors; vendor licensing remains the deployer's
 responsibility.
 
-## Java and Oracle JDK 8u202
+## Java and Tomcat
 
-Temurin is the default Java distribution. The supported combinations are:
+Temurin 25 is the default open-source LTS distribution, but it is not the only
+maintained choice. The [Adoptium roadmap](https://adoptium.net/support/) still
+lists Temurin 8, 11, 17, 21 and 25 as available LTS lines. The supported
+combinations follow Tomcat's Java requirements:
 
-| Tomcat | JDK |
+| Tomcat | Maintained JDK choices |
 | --- | --- |
-| 9.0 | 8, 11, 17, 21 or 25 |
-| 10.1 | 11, 17, 21 or 25 |
-| 11.0 | 17, 21 or 25 |
+| 9.0 | Temurin 8, 11, 17, 21 or 25 |
+| 10.1 | Temurin 11, 17, 21 or 25 |
+| 11.0 | Temurin 17, 21 or 25 |
 
-Oracle JDK 8u202 is an explicit Linux AMD64 compatibility path for applications
-that require that exact vendor build. OneinStack never downloads or commits the
-Oracle archive. Download it with an authorized Oracle account, review the BCL,
-and place it at `tomcat/oracle/jdk-8u202-linux-x64.tar.gz`. Then calculate its
-SHA-256 and configure:
+For maintained Java 8, select Temurin 8 directly. It uses the upstream Tomcat
+Docker Official Image:
 
 ```bash
-./oneinstack configure \
-  --tomcat 9.0 \
-  --jdk 8 \
-  --jdk-vendor oracle \
-  --oracle-jdk8-sha256 SHA256 \
-  --accept-oracle-bcl
-./oneinstack doctor
+./oneinstack configure --tomcat 9.0 --jdk 8
 ./oneinstack build tomcat
 ```
 
-The archive is ignored by Git and the build verifies its checksum and Java
-version. Oracle describes 8u202 as an unpatched archive release and does not
-recommend it for production. Public image redistribution must independently
-satisfy the Oracle BCL; the default Temurin 8 path remains the maintained
-choice.
+JDK distributions without a maintained upstream container image are not
+offered. Temurin 25 remains the default.
 
 ## Sites, proxies and TLS
 
@@ -231,6 +246,39 @@ updated certificate. On a systemd host, `timer-install` installs a persistent
 twice-daily host timer with randomized delay. The timer invokes this manager's
 `tls renew` command and does not mount the Docker socket into a container.
 
+[Nginx Proxy Manager](https://nginxproxymanager.com/guide/) is a separate
+UI-managed web engine:
+
+```bash
+./oneinstack configure --web npm
+./oneinstack up
+# Open http://127.0.0.1:81
+```
+
+It uses the official SQLite deployment and persists `/data` and
+`/etc/letsencrypt` under `npm/`. Proxy hosts and certificates are managed in
+the NPM admin UI; the `site` and Certbot-based `tls issue` commands do not
+pretend to edit NPM's internal database. Its image version and loopback-bound
+admin port are configurable with `NPM_VERSION`, `NPM_ADMIN_BIND` and
+`NPM_ADMIN_PORT`.
+
+[Apache APISIX](https://apisix.apache.org/docs/docker/manual/) is an optional
+API gateway that can run beside any selected web engine:
+
+```bash
+./oneinstack configure --enable apisix
+./oneinstack up
+# Dashboard: http://127.0.0.1:9180/ui/
+```
+
+Gateway HTTP/HTTPS listen on `9080`/`9443` by default. The Dashboard and Admin
+API share port `9180`, bind to loopback by default and require the Admin API key
+stored in the configured `APISIX_ADMIN_KEY_FILE`. APISIX uses traditional mode
+with a private etcd service so routes created through the Admin API and embedded
+Dashboard persist under `apisix/etcd`. APISIX is an API gateway, not a PHP
+virtual-host replacement; upstreams can target existing services such as
+`nginx:80`, `node:3000` or `tomcat:8080` on the shared backend network.
+
 ## Databases, backup and FTP
 
 ```bash
@@ -247,6 +295,10 @@ twice-daily host timer with randomized delay. The timer invokes this manager's
   data/backups/TIMESTAMP/tomcat-webapps.tar.gz --yes
 ./oneinstack backup restore-ftp \
   data/backups/TIMESTAMP/ftp-state.tar.gz --yes
+./oneinstack backup restore-npm \
+  data/backups/TIMESTAMP/npm-state.tar.gz --yes
+./oneinstack backup restore-apisix \
+  data/backups/TIMESTAMP/apisix-etcd.snapshot.db --yes
 
 ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 ./oneinstack site add ftp.example.com --runtime static
@@ -265,13 +317,17 @@ credentials and file contents and is not recommended.
 
 MySQL, MariaDB, Percona and PostgreSQL backups are compressed SQL dumps named
 `database-ENGINE.sql.gz`. MongoDB uses `database-mongodb.archive.gz`.
-Configuration, Tomcat webapps and FTP virtual-user state are separate,
+Configuration, Tomcat webapps, NPM state and FTP virtual-user state are separate,
 independently restorable archives. Database restore rejects a backup whose
 manifest engine does not match the currently selected database. Backups remain
 under `backups/` after both purge modes. Local backup retention defaults to 180
 days and is controlled by `BACKUP_RETENTION_DAYS` in `.env`. This is an
 operational baseline, not a substitute for jurisdiction- or industry-specific
 retention requirements.
+
+When APISIX is enabled, backup creation requires its etcd service to be healthy
+and creates a consistent `etcdctl` snapshot. `restore-apisix` replaces all
+gateway routes and state, restarts APISIX and therefore requires `--yes`.
 
 If the configured FTPS certificate is missing during a full-stack `up`, the
 manager creates a one-year self-signed RSA certificate automatically. It prints
@@ -318,7 +374,7 @@ encrypted.
 networks and locally rebuildable images while preserving every host data
 directory.
 
-Only the following explicit command clears database, Redis, Caddy and FTP data:
+Only the following explicit command clears database, Redis, Caddy, NPM, APISIX and FTP data:
 
 ```bash
 ./oneinstack purge --data --yes
@@ -329,20 +385,20 @@ configuration, logs and backups are preserved even in data-purge mode.
 
 ## Host data layout
 
-The default root is `docker/data`. A custom root selected by `init --data-dir`
+The default root is `data`. A custom root selected by `init --data-dir`
 has the same layout:
 
 - `www/`, `certs/`, `acme/`, `logs/`, `sites/` and `backups/`
-- `secrets/` for the default mode `0600` database and Redis secret files
+- `secrets/` for default mode `0600` service secret files
 - `config/` for generated web-server configuration
 - `mysql/`, `mariadb/`, `percona/`, `postgresql/` and `mongodb/`
-- `redis/`, `caddy/`, `ftp/` and `tomcat/webapps/`
+- `redis/`, `caddy/`, `npm/`, `apisix/etcd/`, `ftp/` and `tomcat/webapps/`
 
 All persistent service state uses explicit host bind mounts. Docker-managed
 named volumes are not used, so the complete deployment data location is visible
 from `./oneinstack show-config`.
 
-The four `*_PASSWORD_FILE` entries in `.env` may point to protected paths
+The credential `*_FILE` entries in `.env` may point to protected paths
 outside this default `secrets/` directory when a host secret manager provides
 the files. Existing externally managed files and their parent directories are
 not re-owned or re-permissioned; they must be readable by the configured

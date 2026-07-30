@@ -2,10 +2,14 @@
 set -Eeuo pipefail
 
 DOCKER_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_DIR="$(CDPATH='' cd -- "${DOCKER_DIR}/.." && pwd)"
+REPO_DIR="${DOCKER_DIR}"
 TEST_DIR="$(mktemp -d /tmp/oneinstack-docker-test.XXXXXX)"
 TEST_ENV="${TEST_DIR}/stack.env"
 TEST_DATA_DIR="${TEST_DIR}/host-data"
+
+# shellcheck source=../scripts/env.sh
+# shellcheck disable=SC1091
+source "${DOCKER_DIR}/scripts/env.sh"
 
 cleanup() {
   rm -rf -- "${TEST_DIR}"
@@ -48,6 +52,7 @@ sh -n \
   "${DOCKER_DIR}/percona/secrets-entrypoint" \
   "${DOCKER_DIR}/postgresql/secrets-entrypoint" \
   "${DOCKER_DIR}/mongodb/secrets-entrypoint" \
+  "${DOCKER_DIR}/apisix/secrets-entrypoint" \
   "${DOCKER_DIR}/ftp/entrypoint" \
   "${DOCKER_DIR}/ftp/manage-user"
 
@@ -69,6 +74,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     "${DOCKER_DIR}/percona/secrets-entrypoint" \
     "${DOCKER_DIR}/postgresql/secrets-entrypoint" \
     "${DOCKER_DIR}/mongodb/secrets-entrypoint" \
+    "${DOCKER_DIR}/apisix/secrets-entrypoint" \
     "${DOCKER_DIR}/ftp/entrypoint" \
     "${DOCKER_DIR}/ftp/manage-user"
 fi
@@ -106,15 +112,27 @@ end
   abort "#{name} must wait for healthy PHP" unless condition == "service_healthy"
 end
 
+tomcat = services.fetch("tomcat")
+tomcat_build = tomcat.fetch("build")
+abort "Tomcat must use its fixed Dockerfile" if tomcat_build.key?("dockerfile")
+expected_tomcat_args = {
+  "TOMCAT_VERSION" => "${TOMCAT_VERSION:-11.0}",
+  "JDK_VERSION" => "${JDK_VERSION:-25}"
+}
+abort "unexpected Tomcat build arguments" unless tomcat_build.fetch("args") == expected_tomcat_args
+expected_tomcat_image = "oneinstack/tomcat:${TOMCAT_VERSION:-11.0}-temurin-jdk${JDK_VERSION:-25}"
+abort "unexpected Tomcat image name" unless tomcat["image"] == expected_tomcat_image
+
 expected_secrets = %w[
-  database_password mysql_root_password mongodb_root_password redis_password
+  apisix_admin_key database_password mysql_root_password mongodb_root_password redis_password
 ]
 abort "unexpected Compose secrets" unless compose.fetch("secrets").keys.sort == expected_secrets.sort
 expected_secret_files = {
   "database_password" => "${DATABASE_PASSWORD_FILE:?DATABASE_PASSWORD_FILE must be set}",
   "mysql_root_password" => "${MYSQL_ROOT_PASSWORD_FILE:?MYSQL_ROOT_PASSWORD_FILE must be set}",
   "mongodb_root_password" => "${MONGODB_ROOT_PASSWORD_FILE:?MONGODB_ROOT_PASSWORD_FILE must be set}",
-  "redis_password" => "${REDIS_PASSWORD_FILE:?REDIS_PASSWORD_FILE must be set}"
+  "redis_password" => "${REDIS_PASSWORD_FILE:?REDIS_PASSWORD_FILE must be set}",
+  "apisix_admin_key" => "${APISIX_ADMIN_KEY_FILE:?APISIX_ADMIN_KEY_FILE must be set}"
 }
 expected_secret_files.each do |name, expected|
   actual = compose.dig("secrets", name, "file")
@@ -125,7 +143,8 @@ expected_service_secrets = {
   %w[mysql mariadb percona] => %w[database_password mysql_root_password],
   %w[postgresql node tomcat] => %w[database_password],
   %w[mongodb] => %w[database_password mongodb_root_password],
-  %w[redis] => %w[redis_password]
+  %w[redis] => %w[redis_password],
+  %w[apisix] => %w[apisix_admin_key]
 }
 expected_service_secrets.each do |names, expected|
   names.each do |name|
@@ -135,9 +154,9 @@ expected_service_secrets.each do |names, expected|
 end
 
 expected_networks = {
-  %w[nginx tengine openresty caddy apache] => %w[frontend backend],
+  %w[nginx tengine openresty caddy apache npm apisix] => %w[frontend backend],
   %w[php php82 php83 php84 php85 node tomcat] => %w[backend egress],
-  %w[mysql mariadb percona postgresql mongodb redis memcached] => %w[backend],
+  %w[mysql mariadb percona postgresql mongodb redis memcached apisix-etcd] => %w[backend],
   %w[phpmyadmin adminer] => %w[frontend backend],
   %w[certbot ftp] => %w[frontend]
 }
@@ -148,6 +167,24 @@ expected_networks.each do |names, expected|
   end
 end
 
+npm = services.fetch("npm")
+abort "unexpected NPM image" unless npm["image"] == "jc21/nginx-proxy-manager:${NPM_VERSION:-2.15.1}"
+abort "NPM must use its packaged health check" unless npm.dig("healthcheck", "test") == ["CMD", "/usr/bin/check-health"]
+abort "NPM must be isolated behind its web profile" unless npm["profiles"] == ["web-npm"]
+expected_npm_admin_port = "${NPM_ADMIN_BIND:-127.0.0.1}:${NPM_ADMIN_PORT:-81}:81"
+abort "NPM admin UI must bind to loopback by default" unless npm.fetch("ports").include?(expected_npm_admin_port)
+
+apisix = services.fetch("apisix")
+abort "unexpected APISIX image" unless apisix["image"] == "oneinstack/apisix:${APISIX_VERSION:-3.17.0-debian}"
+abort "APISIX must use its feature profile" unless apisix["profiles"] == ["feature-apisix"]
+abort "APISIX must wait for healthy etcd" unless apisix.dig("depends_on", "apisix-etcd", "condition") == "service_healthy"
+expected_apisix_admin_port = "${APISIX_ADMIN_BIND:-127.0.0.1}:${APISIX_ADMIN_PORT:-9180}:9180"
+abort "APISIX Admin API must bind to loopback by default" unless apisix.fetch("ports").include?(expected_apisix_admin_port)
+etcd = services.fetch("apisix-etcd")
+abort "unexpected etcd image" unless etcd["image"] == "gcr.io/etcd-development/etcd:${ETCD_VERSION:-v3.6.11}"
+abort "APISIX etcd must not publish host ports" if etcd.key?("ports")
+abort "APISIX etcd must use its feature profile" unless etcd["profiles"] == ["feature-apisix"]
+
 networks = compose.fetch("networks")
 abort "backend network must use the bridge driver" unless networks.dig("backend", "driver") == "bridge"
 abort "backend network must be internal" unless networks.dig("backend", "internal") == true
@@ -157,11 +194,25 @@ RUBY
 fi
 
 [[ -f "${DOCKER_DIR}/tomcat/Dockerfile" ]]
-[[ -f "${DOCKER_DIR}/tomcat/Dockerfile.oracle8" ]]
-grep -q 'ORACLE_JDK8_ACCEPT_BCL.*=.*Y' "${DOCKER_DIR}/tomcat/Dockerfile.oracle8"
-grep -q 'sha256sum -c' "${DOCKER_DIR}/tomcat/Dockerfile.oracle8"
+[[ -f "${DOCKER_DIR}/apisix/Dockerfile" ]]
+grep -Fq "key: \${{APISIX_ADMIN_KEY}}" "${DOCKER_DIR}/apisix/config.yaml"
+grep -Fq 'http://apisix-etcd:2379' "${DOCKER_DIR}/apisix/config.yaml"
+grep -Fq '  user: apisix' "${DOCKER_DIR}/apisix/config.yaml"
+grep -Fq 'apt-get install --yes --no-install-recommends curl libxml2 libxslt1.1' \
+  "${DOCKER_DIR}/apisix/Dockerfile"
+grep -Fq 'rm -f /etc/apt/sources.list.d/apisix.list' \
+  "${DOCKER_DIR}/apisix/Dockerfile"
+grep -Fq 'test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:7085/status/ready"]' \
+  "${DOCKER_DIR}/compose.yaml"
+if grep -Eq 'key: [a-zA-Z0-9_-]{16,}$' "${DOCKER_DIR}/apisix/config.yaml"; then
+  printf 'APISIX configuration contains a hardcoded Admin API key.\n' >&2
+  exit 1
+fi
 grep -q 'TENGINE_SHA256' "${DOCKER_DIR}/tengine/Dockerfile"
 grep -q 'sha256sum -c' "${DOCKER_DIR}/tengine/Dockerfile"
+grep -Fq 'extension_loaded("Zend OPcache")' "${DOCKER_DIR}/php/Dockerfile"
+grep -Fq "docker-php-ext-install -j\"\$(nproc)\" opcache" \
+  "${DOCKER_DIR}/php/Dockerfile"
 for web_dockerfile in nginx openresty tengine; do
   grep -q 'fastcgi_pass 127.0.0.1:9000' \
     "${DOCKER_DIR}/${web_dockerfile}/Dockerfile"
@@ -171,6 +222,7 @@ grep -q 'set -- "\$@" -Y 3 -2' "${DOCKER_DIR}/ftp/entrypoint"
 grep -q "chown -R mysql:mysql /var/lib/mysql" \
   "${DOCKER_DIR}/percona/secrets-entrypoint"
 grep -q 'setpriv --reuid=mysql --regid=mysql' "${DOCKER_DIR}/percona/secrets-entrypoint"
+grep -q -- '--set-gtid-purged=OFF' "${DOCKER_DIR}/scripts/backup.sh"
 
 # Match the literal default-path expression in the manager source.
 # shellcheck disable=SC2016
@@ -182,6 +234,23 @@ if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_DIR}/unsafe.env" \
   printf 'Unsafe host data directory was accepted.\n' >&2
   exit 1
 fi
+
+CONFIGURE_HELP="$(ONEINSTACK_ENV_FILE="${TEST_DIR}/missing.env" \
+  "${DOCKER_DIR}/oneinstack" configure -h)"
+grep -q '^Usage:$' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--db ENGINE[:VERSION]' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--redis VERSION' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--apisix VERSION' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--memcached VERSION' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--phpmyadmin VERSION' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--adminer VERSION' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--ftp-tls-mode MODE' <<<"${CONFIGURE_HELP}"
+if grep -qi 'oracle' <<<"${CONFIGURE_HELP}"; then
+  printf 'Removed Oracle JDK options remain in configure help.\n' >&2
+  exit 1
+fi
+cmp <("${DOCKER_DIR}/oneinstack" configure --help) \
+  <("${DOCKER_DIR}/oneinstack" help configure)
 
 mkdir -p "${TEST_DIR}/nonempty-data"
 touch "${TEST_DIR}/nonempty-data/unrelated"
@@ -198,29 +267,35 @@ TEST_DATA_DIR="$(CDPATH='' cd -- "${TEST_DATA_DIR}" && pwd -P)"
 grep -q '^COMPOSE_PROFILES=web-nginx,db-mysql$' "${TEST_ENV}"
 grep -q '^WEB_ENGINE=nginx$' "${TEST_ENV}"
 grep -q '^DATABASE_ENGINE=mysql$' "${TEST_ENV}"
-grep -q '^MYSQL_VERSION=8.4$' "${TEST_ENV}"
+grep -q '^MYSQL_VERSION=9.7$' "${TEST_ENV}"
+grep -q '^JDK_VERSION=25$' "${TEST_ENV}"
 grep -q "^ONEINSTACK_DATA_DIR=${TEST_DATA_DIR}$" "${TEST_ENV}"
 grep -q "^DATABASE_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/database_password$" "${TEST_ENV}"
 grep -q "^MYSQL_ROOT_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/mysql_root_password$" "${TEST_ENV}"
 grep -q "^MONGODB_ROOT_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/mongodb_root_password$" "${TEST_ENV}"
 grep -q "^REDIS_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/redis_password$" "${TEST_ENV}"
+grep -q "^APISIX_ADMIN_KEY_FILE=${TEST_DATA_DIR}/secrets/apisix_admin_key$" "${TEST_ENV}"
 grep -q '^BACKUP_RETENTION_DAYS=180$' "${TEST_ENV}"
 grep -q '^oneinstack-data-v1$' "${TEST_DATA_DIR}/.oneinstack-managed"
 [[ -f "${TEST_DATA_DIR}/www/default/index.php" ]]
 [[ -f "${TEST_DATA_DIR}/tomcat/webapps/ROOT/index.jsp" ]]
 [[ -f "${TEST_DATA_DIR}/config/nginx/default.conf" ]]
 [[ -d "${TEST_DATA_DIR}/mysql" ]]
+[[ -d "${TEST_DATA_DIR}/npm/data" ]]
+[[ -d "${TEST_DATA_DIR}/npm/letsencrypt" ]]
+[[ -d "${TEST_DATA_DIR}/apisix/etcd" ]]
+[[ "$(test_mode "${TEST_DATA_DIR}/apisix/etcd")" == "700" ]]
 [[ -d "${TEST_DATA_DIR}/backups" ]]
 if grep -Eq 'change-me-(app|root|redis|mongodb)' "${TEST_ENV}"; then
   printf 'Generated environment still contains placeholder credentials.\n' >&2
   exit 1
 fi
-for secret_name in database_password mysql_root_password mongodb_root_password redis_password; do
+for secret_name in database_password mysql_root_password mongodb_root_password redis_password apisix_admin_key; do
   secret_file="${TEST_DATA_DIR}/secrets/${secret_name}"
   [[ -s "${secret_file}" ]]
   [[ "$(test_mode "${secret_file}")" == "600" ]]
 done
-if grep -Eq '^(DATABASE_PASSWORD|MYSQL_ROOT_PASSWORD|MONGODB_ROOT_PASSWORD|REDIS_PASSWORD)=.+' \
+if grep -Eq '^(DATABASE_PASSWORD|MYSQL_ROOT_PASSWORD|MONGODB_ROOT_PASSWORD|REDIS_PASSWORD|APISIX_ADMIN_KEY)=.+' \
   "${TEST_ENV}"; then
   printf 'Generated environment contains an inline service password.\n' >&2
   exit 1
@@ -234,9 +309,11 @@ if grep -q "$(cat "${TEST_DATA_DIR}/secrets/database_password")" <<<"${SECRET_ST
   exit 1
 fi
 SHOW_CONFIG="$("${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" show-config)"
-grep -q '^Database: *mysql:8.4 (mysql:3306)$' <<<"${SHOW_CONFIG}"
+grep -q '^Database: *mysql:9.7 (mysql:3306)$' <<<"${SHOW_CONFIG}"
 grep -q '^Secret sources:$' <<<"${SHOW_CONFIG}"
 grep -q "^redis *configured ${TEST_DATA_DIR}/secrets/redis_password$" \
+  <<<"${SHOW_CONFIG}"
+grep -q "^apisix *configured ${TEST_DATA_DIR}/secrets/apisix_admin_key$" \
   <<<"${SHOW_CONFIG}"
 
 printf 'configured-database-password\n' |
@@ -256,12 +333,15 @@ printf 'configured-redis-password\n' |
 grep -q "^REDIS_PASSWORD_FILE=${CUSTOM_REDIS_SECRET}$" "${TEST_ENV}"
 
 "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
-  configure --db mysql:8.0 >/dev/null
+  configure --db mysql:8.4.10 >/dev/null
 grep -q '^DATABASE_ENGINE=mysql$' "${TEST_ENV}"
-grep -q '^MYSQL_VERSION=8.0$' "${TEST_ENV}"
+grep -q '^MYSQL_VERSION=8.4.10$' "${TEST_ENV}"
 "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
   configure --db mysql >/dev/null
-grep -q '^MYSQL_VERSION=8.0$' "${TEST_ENV}"
+grep -q '^MYSQL_VERSION=8.4.10$' "${TEST_ENV}"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db mysql:9.7 >/dev/null
+grep -q '^MYSQL_VERSION=9.7$' "${TEST_ENV}"
 
 for database_case in \
   mariadb:11.8:MARIADB_VERSION \
@@ -277,7 +357,7 @@ for database_case in \
 done
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
-for invalid_database in mysql: mysql:8.0@sha none:1; do
+for invalid_database in mysql: mysql:8.0 mysql:9.6 mysql:9.7@sha none:1; do
   if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
     configure --db "${invalid_database}" >/dev/null 2>&1; then
     printf 'Invalid database version was accepted: %s\n' "${invalid_database}" >&2
@@ -285,6 +365,78 @@ for invalid_database in mysql: mysql:8.0@sha none:1; do
   fi
   cmp "${TEST_ENV}" "${TEST_ENV}.before"
 done
+
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --php 8.1 >/dev/null 2>&1; then
+  printf 'Unsupported PHP 8.1 was accepted.\n' >&2
+  exit 1
+fi
+cmp "${TEST_ENV}" "${TEST_ENV}.before"
+
+cp "${TEST_ENV}" "${TEST_ENV}.unsupported-php"
+env_set "${TEST_ENV}" PHP_VERSION 8.1
+unsupported_php_output="$(
+  "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" config --quiet 2>&1 || true
+)"
+grep -q 'Supported PHP versions are 8.2, 8.3, 8.4 and 8.5.' \
+  <<<"${unsupported_php_output}"
+env_set "${TEST_ENV}" PHP_VERSION 8.4
+env_set "${TEST_ENV}" ADDITIONAL_PHP 8.1
+unsupported_php_output="$(
+  "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" config --quiet 2>&1 || true
+)"
+grep -q 'Supported PHP versions are 8.2, 8.3, 8.4 and 8.5.' \
+  <<<"${unsupported_php_output}"
+mv "${TEST_ENV}.unsupported-php" "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db mysql --redis 8.6-alpine --memcached 1.6-alpine \
+  --phpmyadmin 5.2-apache --adminer 5-standalone \
+  --apisix 3.17.0-debian >/dev/null
+grep -q '^REDIS_VERSION=8.6-alpine$' "${TEST_ENV}"
+grep -q '^MEMCACHED_VERSION=1.6-alpine$' "${TEST_ENV}"
+grep -q '^PHPMYADMIN_VERSION=5.2-apache$' "${TEST_ENV}"
+grep -q '^ADMINER_VERSION=5-standalone$' "${TEST_ENV}"
+grep -q '^APISIX_VERSION=3.17.0-debian$' "${TEST_ENV}"
+grep -q '^ENABLE_REDIS=1$' "${TEST_ENV}"
+grep -q '^ENABLE_MEMCACHED=1$' "${TEST_ENV}"
+grep -q '^ENABLE_PHPMYADMIN=1$' "${TEST_ENV}"
+grep -q '^ENABLE_ADMINER=1$' "${TEST_ENV}"
+grep -q '^ENABLE_APISIX=1$' "${TEST_ENV}"
+grep -q '^COMPOSE_PROFILES=.*redis' "${TEST_ENV}"
+grep -q '^COMPOSE_PROFILES=.*memcached' "${TEST_ENV}"
+grep -q '^COMPOSE_PROFILES=.*tools-phpmyadmin' "${TEST_ENV}"
+grep -q '^COMPOSE_PROFILES=.*tools-adminer' "${TEST_ENV}"
+grep -q '^COMPOSE_PROFILES=.*feature-apisix' "${TEST_ENV}"
+
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+for invalid_option in redis memcached phpmyadmin adminer apisix; do
+  if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+    configure "--${invalid_option}" '8.0@sha' >/dev/null 2>&1; then
+    printf 'Invalid %s version was accepted.\n' "${invalid_option}" >&2
+    exit 1
+  fi
+  cmp "${TEST_ENV}" "${TEST_ENV}.before"
+done
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --disable phpmyadmin,adminer >/dev/null
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --web npm >/dev/null
+grep -q '^WEB_ENGINE=npm$' "${TEST_ENV}"
+grep -q '^COMPOSE_PROFILES=web-npm,' "${TEST_ENV}"
+if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  site add npm.example.com --runtime proxy --target node:3000 >/dev/null 2>&1; then
+  printf 'CLI site management was accepted for Nginx Proxy Manager.\n' >&2
+  exit 1
+fi
+if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  tls renew >/dev/null 2>&1; then
+  printf 'Certbot renewal was accepted for Nginx Proxy Manager.\n' >&2
+  exit 1
+fi
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --web nginx >/dev/null
 if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
   secret set redis --path /etc/passwd --generate >/dev/null 2>&1; then
   printf 'An unsafe secret target was accepted.\n' >&2
@@ -292,8 +444,6 @@ if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
 fi
 
 rm "${TEST_DATA_DIR}/secrets/database_password"
-# shellcheck disable=SC1091
-source "${DOCKER_DIR}/scripts/env.sh"
 env_set "${TEST_ENV}" DATABASE_PASSWORD 'legacy-$-password'
 "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" show-config >/dev/null
 [[ "$(cat "${TEST_DATA_DIR}/secrets/database_password")" == 'legacy-$-password' ]]
@@ -383,7 +533,9 @@ grep -q 'listen 443 ssl' "${TEST_DATA_DIR}/config/nginx/static.example.com.conf"
 printf 'configuration-original\n' >"${TEST_DATA_DIR}/config/recovery-marker"
 printf 'tomcat-original\n' >"${TEST_DATA_DIR}/tomcat/webapps/recovery-marker"
 printf 'ftp-original\n' >"${TEST_DATA_DIR}/ftp/recovery-marker"
-"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" configure --db none >/dev/null
+printf 'npm-original\n' >"${TEST_DATA_DIR}/npm/data/recovery-marker"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db none --disable apisix >/dev/null
 "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" backup create >/dev/null
 BACKUP_DIR="$(find "${TEST_DATA_DIR}/backups" -mindepth 1 -maxdepth 1 \
   -type d -name '[0-9]*' -print -quit)"
@@ -392,12 +544,21 @@ BACKUP_DIR="$(find "${TEST_DATA_DIR}/backups" -mindepth 1 -maxdepth 1 \
 [[ -f "${BACKUP_DIR}/configuration.tar.gz" ]]
 [[ -f "${BACKUP_DIR}/tomcat-webapps.tar.gz" ]]
 [[ -f "${BACKUP_DIR}/ftp-state.tar.gz" ]]
+[[ -f "${BACKUP_DIR}/npm-state.tar.gz" ]]
 [[ -f "${BACKUP_DIR}/SHA256SUMS" ]]
 grep -q '^STATUS=complete$' "${BACKUP_DIR}/manifest.env"
 grep -q '  webroot.tar.gz$' "${BACKUP_DIR}/SHA256SUMS"
 grep -q '  configuration.tar.gz$' "${BACKUP_DIR}/SHA256SUMS"
+rm "${TEST_DATA_DIR}/npm/data/recovery-marker"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" backup restore-npm \
+  "${BACKUP_DIR}/npm-state.tar.gz" --yes >/dev/null
+grep -q '^npm-original$' "${TEST_DATA_DIR}/npm/data/recovery-marker"
 grep -q '  tomcat-webapps.tar.gz$' "${BACKUP_DIR}/SHA256SUMS"
 grep -q '  ftp-state.tar.gz$' "${BACKUP_DIR}/SHA256SUMS"
+grep -Fq 'compose run --rm --no-deps' "${DOCKER_DIR}/scripts/backup.sh"
+grep -Fq 'snapshot save /backup/apisix-etcd.snapshot.db' "${DOCKER_DIR}/scripts/backup.sh"
+grep -Fq 'apisix -rf /etcd-data/member' "${DOCKER_DIR}/scripts/backup.sh"
+grep -Fq 'etcdutl snapshot restore /snapshot.db' "${DOCKER_DIR}/scripts/backup.sh"
 if find "${TEST_DATA_DIR}/backups" -maxdepth 1 -type d -name '.*.partial.*' \
   -print -quit | grep -q .; then
   printf 'A partial backup directory remained after a successful backup.\n' >&2
@@ -509,31 +670,39 @@ fi
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
 if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
-  configure --tomcat 9.0 --jdk 8 --jdk-vendor oracle \
-  --oracle-jdk8-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  >/dev/null 2>&1; then
-  printf 'Oracle JDK was accepted without explicit BCL acceptance.\n' >&2
+  configure --tomcat 11.0 --jdk 11 >/dev/null 2>&1; then
+  printf 'Temurin below the Tomcat 11 minimum was accepted.\n' >&2
+  exit 1
+fi
+cmp "${TEST_ENV}" "${TEST_ENV}.before"
+
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --tomcat 11.0 --jdk 22 >/dev/null 2>&1; then
+  printf 'A non-LTS Temurin selection was accepted.\n' >&2
+  exit 1
+fi
+cmp "${TEST_ENV}" "${TEST_ENV}.before"
+
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --tomcat 9.0 --jdk 8 --jdk-vendor oracle >/dev/null 2>&1; then
+  printf 'Removed Oracle JDK vendor option was accepted.\n' >&2
   exit 1
 fi
 cmp "${TEST_ENV}" "${TEST_ENV}.before"
 
 "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
-  configure --tomcat 9.0 --jdk 8 --jdk-vendor oracle \
-  --oracle-jdk8-sha256 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
-  --accept-oracle-bcl >/dev/null
-grep -q '^JDK_VENDOR=oracle$' "${TEST_ENV}"
-grep -q '^TOMCAT_DOCKERFILE=Dockerfile.oracle8$' "${TEST_ENV}"
-grep -q '^ORACLE_JDK8_ACCEPT_BCL=Y$' "${TEST_ENV}"
-grep -q '^ORACLE_JDK8_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa$' \
-  "${TEST_ENV}"
+  configure --tomcat 11.0 --jdk 21 >/dev/null
+grep -q '^JDK_VERSION=21$' "${TEST_ENV}"
 
-cp "${TEST_ENV}" "${TEST_ENV}.before"
-if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
-  configure --tomcat 11.0 >/dev/null 2>&1; then
-  printf 'Oracle JDK 8u202 was accepted with Tomcat 11.\n' >&2
-  exit 1
-fi
-cmp "${TEST_ENV}" "${TEST_ENV}.before"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --tomcat 10.1 --jdk 11 >/dev/null
+grep -q '^JDK_VERSION=11$' "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --tomcat 9.0 --jdk 8 >/dev/null
+grep -q '^JDK_VERSION=8$' "${TEST_ENV}"
 
 printf '%s\n' '#!/bin/sh' 'exit 0' >"${TEST_DIR}/bin/docker"
 chmod 0755 "${TEST_DIR}/bin/docker"
@@ -542,6 +711,8 @@ touch \
   "${TEST_DATA_DIR}/mysql/database.keep" \
   "${TEST_DATA_DIR}/redis/cache.keep" \
   "${TEST_DATA_DIR}/caddy/data/state.keep" \
+  "${TEST_DATA_DIR}/npm/data/state.keep" \
+  "${TEST_DATA_DIR}/apisix/etcd/state.keep" \
   "${TEST_DATA_DIR}/ftp/credentials.keep" \
   "${TEST_DATA_DIR}/backups/database-mysql.sql.gz" \
   "${TEST_DATA_DIR}/www/site.keep" \
@@ -559,6 +730,8 @@ PATH="${TEST_DIR}/bin:${PATH}" \
   "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" purge --yes >/dev/null
 [[ -f "${TEST_DATA_DIR}/mysql/database.keep" ]]
 [[ -f "${TEST_DATA_DIR}/redis/cache.keep" ]]
+[[ -f "${TEST_DATA_DIR}/npm/data/state.keep" ]]
+[[ -f "${TEST_DATA_DIR}/apisix/etcd/state.keep" ]]
 [[ -f "${TEST_DATA_DIR}/backups/database-mysql.sql.gz" ]]
 [[ -f "${TEST_DATA_DIR}/www/site.keep" ]]
 [[ -f "${TEST_DATA_DIR}/certs/certificate.keep" ]]
@@ -576,20 +749,20 @@ PATH="${TEST_DIR}/bin:${PATH}" \
 [[ ! -e "${TEST_DATA_DIR}/mysql/database.keep" ]]
 [[ ! -e "${TEST_DATA_DIR}/redis/cache.keep" ]]
 [[ ! -e "${TEST_DATA_DIR}/caddy/data/state.keep" ]]
+[[ ! -e "${TEST_DATA_DIR}/npm/data/state.keep" ]]
+[[ ! -e "${TEST_DATA_DIR}/apisix/etcd/state.keep" ]]
 [[ ! -e "${TEST_DATA_DIR}/ftp/credentials.keep" ]]
 [[ -d "${TEST_DATA_DIR}/mysql" ]]
 [[ -d "${TEST_DATA_DIR}/redis" ]]
+[[ -d "${TEST_DATA_DIR}/npm/data" ]]
+[[ -d "${TEST_DATA_DIR}/npm/letsencrypt" ]]
+[[ -d "${TEST_DATA_DIR}/apisix/etcd" ]]
 [[ -f "${TEST_DATA_DIR}/backups/database-mysql.sql.gz" ]]
 [[ -f "${TEST_DATA_DIR}/www/site.keep" ]]
 [[ -f "${TEST_DATA_DIR}/certs/certificate.keep" ]]
 
-if find "${DOCKER_DIR}/tomcat/oracle" -type f ! -name README.md -print -quit | grep -q .; then
-  printf 'An Oracle JDK binary or unapproved file exists in the repository tree.\n' >&2
-  exit 1
-fi
-
 if find "${DOCKER_DIR}" -name .env -type f -print -quit | grep -q .; then
-  printf 'A runtime .env file exists inside docker/.\n' >&2
+  printf 'A runtime .env file exists inside the project tree.\n' >&2
   exit 1
 fi
 

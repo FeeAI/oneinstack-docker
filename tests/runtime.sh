@@ -18,10 +18,10 @@ source "${DOCKER_DIR}/scripts/env.sh"
 
 cleanup() {
   local exit_code=$?
-  local cleanup_image="oneinstack/mysql:8.4"
+  local cleanup_image="oneinstack/mysql:9.7"
 
   if [[ -f "${ENV_FILE}" ]]; then
-    cleanup_image="oneinstack/mysql:$(env_get "${ENV_FILE}" MYSQL_VERSION 8.4)"
+    cleanup_image="oneinstack/mysql:$(env_get "${ENV_FILE}" MYSQL_VERSION 9.7)"
     if ((exit_code != 0)); then
       "${MANAGER[@]}" ps >&2 || true
       "${MANAGER[@]}" compose logs --no-color --tail=120 >&2 || true
@@ -114,7 +114,48 @@ HTTP_RESPONSE="$(
 docker image inspect \
   oneinstack/php:8.4 \
   oneinstack/nginx:stable \
-  oneinstack/mysql:8.4 \
+  oneinstack/mysql:9.7 \
+  --format '{{.Id}} {{json .RepoTags}} {{json .RepoDigests}}'
+
+"${MANAGER[@]}" down --remove-orphans
+"${MANAGER[@]}" configure --web npm
+env_set "${ENV_FILE}" NPM_ADMIN_BIND 127.0.0.1
+env_set "${ENV_FILE}" NPM_ADMIN_PORT 18081
+"${MANAGER[@]}" up
+curl --fail --silent --show-error "http://127.0.0.1:18081/" >/dev/null
+
+"${MANAGER[@]}" down --remove-orphans
+"${MANAGER[@]}" configure --web nginx --enable apisix
+env_set "${ENV_FILE}" APISIX_HTTP_BIND 127.0.0.1
+env_set "${ENV_FILE}" APISIX_HTTP_PORT 19080
+env_set "${ENV_FILE}" APISIX_HTTPS_BIND 127.0.0.1
+env_set "${ENV_FILE}" APISIX_HTTPS_PORT 19443
+env_set "${ENV_FILE}" APISIX_ADMIN_BIND 127.0.0.1
+env_set "${ENV_FILE}" APISIX_ADMIN_PORT 19180
+"${MANAGER[@]}" up
+
+curl --fail --silent --show-error "http://127.0.0.1:19180/ui/" >/dev/null
+APISIX_ADMIN_KEY="$(cat "$(env_get "${ENV_FILE}" APISIX_ADMIN_KEY_FILE)")"
+curl --fail --silent --show-error --request PUT \
+  --header "X-API-KEY: ${APISIX_ADMIN_KEY}" \
+  --header 'Content-Type: application/json' \
+  --data '{"uri":"/healthz","upstream":{"type":"roundrobin","nodes":{"nginx:80":1}}}' \
+  "http://127.0.0.1:19180/apisix/admin/routes/runtime-health" >/dev/null
+curl --fail --silent --show-error "http://127.0.0.1:19080/healthz" | grep -q '^ok$'
+
+"${MANAGER[@]}" backup create
+APISIX_BACKUP="$(find "${DATA_DIR}/backups" -mindepth 2 -maxdepth 2 \
+  -type f -name 'apisix-etcd.snapshot.db' -print | sort | tail -1)"
+[[ -n "${APISIX_BACKUP}" ]]
+curl --fail --silent --show-error --request DELETE \
+  --header "X-API-KEY: ${APISIX_ADMIN_KEY}" \
+  "http://127.0.0.1:19180/apisix/admin/routes/runtime-health" >/dev/null
+"${MANAGER[@]}" backup restore-apisix "${APISIX_BACKUP}" --yes
+"${MANAGER[@]}" up
+curl --fail --silent --show-error "http://127.0.0.1:19080/healthz" | grep -q '^ok$'
+docker image inspect \
+  oneinstack/apisix:3.17.0-debian \
+  gcr.io/etcd-development/etcd:v3.6.11 \
   --format '{{.Id}} {{json .RepoTags}} {{json .RepoDigests}}'
 
 printf 'OneinStack Docker runtime acceptance passed.\n'

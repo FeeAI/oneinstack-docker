@@ -28,5 +28,3 @@ tomcat/webapps/*
 !tomcat/webapps/ROOT/
 tomcat/webapps/ROOT/*
 !tomcat/webapps/ROOT/index.jsp
-tomcat/oracle/*
-!tomcat/oracle/README.md
