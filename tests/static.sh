@@ -71,9 +71,9 @@ require "yaml"
 docker_dir = ARGV.fetch(0)
 compose = YAML.safe_load(
   File.read(File.join(docker_dir, "compose.yaml")),
-  [],
-  [],
-  true
+  permitted_classes: [],
+  permitted_symbols: [],
+  aliases: true
 )
 services = compose.fetch("services")
 abort "expected at least 20 services" unless services.size >= 20

@@ -17,8 +17,10 @@ source "${DOCKER_DIR}/scripts/env.sh"
 
 cleanup() {
   local exit_code=$?
+  local cleanup_image="oneinstack/mysql:8.4"
 
   if [[ -f "${ENV_FILE}" ]]; then
+    cleanup_image="oneinstack/mysql:$(env_get "${ENV_FILE}" MYSQL_VERSION 8.4)"
     if ((exit_code != 0)); then
       "${MANAGER[@]}" ps >&2 || true
       "${MANAGER[@]}" compose logs --no-color --tail=120 >&2 || true
@@ -28,7 +30,20 @@ cleanup() {
   if [[ "${KEEP_RUNTIME_DATA}" == "1" ]]; then
     printf '[runtime] Preserved test data: %s\n' "${TEST_ROOT}" >&2
   else
-    rm -rf -- "${TEST_ROOT}"
+    if ! rm -rf -- "${TEST_ROOT}" 2>/dev/null; then
+      if docker image inspect "${cleanup_image}" >/dev/null 2>&1; then
+        docker run --rm --entrypoint sh \
+          --volume "${TEST_ROOT}:/cleanup" "${cleanup_image}" \
+          -c 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*' >/dev/null 2>&1 ||
+          true
+      fi
+      if ! rm -rf -- "${TEST_ROOT}" 2>/dev/null; then
+        printf '[runtime] Could not remove test data: %s\n' "${TEST_ROOT}" >&2
+        if ((exit_code == 0)); then
+          exit_code=1
+        fi
+      fi
+    fi
   fi
   exit "${exit_code}"
 }
