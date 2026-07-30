@@ -35,7 +35,6 @@ sh -n \
   "${DOCKER_DIR}/php/secrets-entrypoint" \
   "${DOCKER_DIR}/node/secrets-entrypoint" \
   "${DOCKER_DIR}/tomcat/secrets-entrypoint" \
-  "${DOCKER_DIR}/mysql/secrets-entrypoint" \
   "${DOCKER_DIR}/mariadb/secrets-entrypoint" \
   "${DOCKER_DIR}/percona/secrets-entrypoint" \
   "${DOCKER_DIR}/postgresql/secrets-entrypoint" \
@@ -57,7 +56,6 @@ if command -v shellcheck >/dev/null 2>&1; then
     "${DOCKER_DIR}/php/secrets-entrypoint" \
     "${DOCKER_DIR}/node/secrets-entrypoint" \
     "${DOCKER_DIR}/tomcat/secrets-entrypoint" \
-    "${DOCKER_DIR}/mysql/secrets-entrypoint" \
     "${DOCKER_DIR}/mariadb/secrets-entrypoint" \
     "${DOCKER_DIR}/percona/secrets-entrypoint" \
     "${DOCKER_DIR}/postgresql/secrets-entrypoint" \

@@ -13,9 +13,11 @@ DATA_DIR="$(env_get "${ENV_FILE}" ONEINSTACK_DATA_DIR)"
 [[ -n "${DATA_DIR}" && "${DATA_DIR}" == /* ]] ||
   { printf '[site] Error: ONEINSTACK_DATA_DIR must be an absolute path.\n' >&2; exit 1; }
 DATA_DIR="${DATA_DIR%/}"
-[[ -f "${DATA_DIR}/.oneinstack-managed" ]] &&
-  [[ "$(head -n 1 "${DATA_DIR}/.oneinstack-managed")" == "oneinstack-data-v1" ]] ||
-  { printf '[site] Error: managed data marker is missing or invalid.\n' >&2; exit 1; }
+if [[ ! -f "${DATA_DIR}/.oneinstack-managed" ]] ||
+  [[ "$(head -n 1 "${DATA_DIR}/.oneinstack-managed")" != "oneinstack-data-v1" ]]; then
+  printf '[site] Error: managed data marker is missing or invalid.\n' >&2
+  exit 1
+fi
 METADATA_DIR="${DATA_DIR}/sites"
 
 fail() {
