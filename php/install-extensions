@@ -1,0 +1,198 @@
+#!/bin/sh
+set -eu
+
+has_extension() {
+  case ",${PHP_EXTENSIONS}," in
+    *,"$1",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+enable_pecl_extension() {
+  extension="$1"
+  package="$2"
+
+  pecl install "${package}"
+  docker-php-ext-enable "${extension}"
+}
+
+verify_extension() {
+  extension="$1"
+  php -r "exit(extension_loaded('${extension}') ? 0 : 1);" ||
+    {
+      printf 'PHP extension is not loadable: %s\n' "${extension}" >&2
+      exit 1
+    }
+}
+
+install_extra_pecl_packages() {
+  remaining_pecl_specs="${PHP_EXTRA_PECL_PACKAGES:-}"
+  while [ -n "${remaining_pecl_specs}" ]; do
+    case "${remaining_pecl_specs}" in
+      *,*)
+        pecl_spec="${remaining_pecl_specs%%,*}"
+        remaining_pecl_specs="${remaining_pecl_specs#*,}"
+        ;;
+      *)
+        pecl_spec="${remaining_pecl_specs}"
+        remaining_pecl_specs=""
+        ;;
+    esac
+    [ -n "${pecl_spec}" ] || continue
+    printf '%s\n' "${pecl_spec}" |
+      grep -Eq '^[a-z][a-z0-9_]*@[A-Za-z][A-Za-z0-9_]*-[0-9][A-Za-z0-9._-]*$' ||
+      {
+        printf 'Invalid PHP_EXTRA_PECL_PACKAGES entry: %s\n' "${pecl_spec}" >&2
+        exit 1
+      }
+    pecl_module="${pecl_spec%%@*}"
+    pecl_package="${pecl_spec#*@}"
+    enable_pecl_extension "${pecl_module}" "${pecl_package}"
+  done
+}
+
+install_custom_extensions() {
+  extension_dir="$(php-config --extension-dir)"
+
+  for extension_file in /opt/oneinstack/php-custom/extensions/*.so; do
+    [ -f "${extension_file}" ] || continue
+    cp "${extension_file}" "${extension_dir}/"
+  done
+  for ini_file in /opt/oneinstack/php-custom/conf.d/*.ini; do
+    [ -f "${ini_file}" ] || continue
+    cp "${ini_file}" /usr/local/etc/php/conf.d/
+  done
+}
+
+verify_selected_extensions() {
+  remaining_extensions="${PHP_EXTENSIONS:-none}"
+  while [ -n "${remaining_extensions}" ]; do
+    case "${remaining_extensions}" in
+      *,*)
+        extension="${remaining_extensions%%,*}"
+        remaining_extensions="${remaining_extensions#*,}"
+        ;;
+      *)
+        extension="${remaining_extensions}"
+        remaining_extensions=""
+        ;;
+    esac
+    case "${extension}" in
+      none) ;;
+      sqlsrv)
+        verify_extension sqlsrv
+        verify_extension pdo_sqlsrv
+        ;;
+      yar)
+        verify_extension msgpack
+        verify_extension yar
+        ;;
+      *) verify_extension "${extension}" ;;
+    esac
+  done
+
+  remaining_pecl_specs="${PHP_EXTRA_PECL_PACKAGES:-}"
+  while [ -n "${remaining_pecl_specs}" ]; do
+    case "${remaining_pecl_specs}" in
+      *,*)
+        pecl_spec="${remaining_pecl_specs%%,*}"
+        remaining_pecl_specs="${remaining_pecl_specs#*,}"
+        ;;
+      *)
+        pecl_spec="${remaining_pecl_specs}"
+        remaining_pecl_specs=""
+        ;;
+    esac
+    [ -n "${pecl_spec}" ] || continue
+    verify_extension "${pecl_spec%%@*}"
+  done
+
+  php_modules_output="$(php -m 2>&1)" || {
+    printf '%s\n' "${php_modules_output}" >&2
+    exit 1
+  }
+  case "${php_modules_output}" in
+    *"PHP Startup:"*)
+      printf '%s\n' "${php_modules_output}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+if [ "${1:-}" = "verify" ]; then
+  verify_selected_extensions
+  exit 0
+fi
+
+if has_extension calendar; then
+  docker-php-ext-install -j"$(nproc)" calendar
+fi
+
+if has_extension ldap; then
+  docker-php-ext-configure ldap --with-libdir="lib/$(gcc -dumpmachine)"
+  docker-php-ext-install -j"$(nproc)" ldap
+fi
+
+if has_extension pgsql; then
+  docker-php-ext-install -j"$(nproc)" pgsql pdo_pgsql
+fi
+
+if has_extension imagick; then
+  enable_pecl_extension imagick "imagick-${PHP_IMAGICK_VERSION}"
+fi
+
+if has_extension redis; then
+  enable_pecl_extension redis "redis-${PHPREDIS_VERSION}"
+fi
+
+if has_extension memcached; then
+  printf '\n\n\n\n\n\n' | pecl install "memcached-${PHP_MEMCACHED_VERSION}"
+  docker-php-ext-enable memcached
+fi
+
+if has_extension memcache; then
+  enable_pecl_extension memcache "memcache-${PHP_MEMCACHE_VERSION}"
+fi
+
+if has_extension mongodb; then
+  enable_pecl_extension mongodb "mongodb-${PHP_MONGODB_VERSION}"
+fi
+
+if has_extension imap; then
+  enable_pecl_extension imap "imap-${PHP_IMAP_VERSION}"
+fi
+
+if has_extension apcu; then
+  enable_pecl_extension apcu "apcu-${PHP_APCU_VERSION}"
+fi
+
+if has_extension yaf; then
+  enable_pecl_extension yaf "yaf-${PHP_YAF_VERSION}"
+fi
+
+if has_extension phalcon; then
+  enable_pecl_extension phalcon "phalcon-${PHP_PHALCON_VERSION}"
+fi
+
+if has_extension yar; then
+  enable_pecl_extension msgpack "msgpack-${PHP_MSGPACK_VERSION}"
+  enable_pecl_extension yar "yar-${PHP_YAR_VERSION}"
+fi
+
+if has_extension swoole; then
+  printf '\n\n\n\n\n\n\n\n' | pecl install "swoole-${PHP_SWOOLE_VERSION}"
+  docker-php-ext-enable swoole
+fi
+
+if has_extension xdebug; then
+  enable_pecl_extension xdebug "xdebug-${PHP_XDEBUG_VERSION}"
+fi
+
+if has_extension sqlsrv; then
+  enable_pecl_extension sqlsrv "sqlsrv-${PHP_SQLSRV_VERSION}"
+  enable_pecl_extension pdo_sqlsrv "pdo_sqlsrv-${PHP_SQLSRV_VERSION}"
+fi
+
+install_extra_pecl_packages
+install_custom_extensions
+verify_selected_extensions

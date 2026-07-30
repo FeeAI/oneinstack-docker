@@ -1,0 +1,41 @@
+ARG TOMCAT_VERSION=9.0
+FROM tomcat:${TOMCAT_VERSION}-jdk8-temurin
+
+ARG TARGETARCH
+ARG ORACLE_JDK8_ARCHIVE=jdk-8u202-linux-x64.tar.gz
+ARG ORACLE_JDK8_SHA256
+ARG ORACLE_JDK8_ACCEPT_BCL=N
+
+LABEL org.opencontainers.image.title="OneinStack Tomcat with Oracle JDK 8u202"
+LABEL org.opencontainers.image.source="https://github.com/FeeAI/oneinstack"
+LABEL org.opencontainers.image.licenses="LicenseRef-Oracle-BCL"
+
+COPY oracle/ /tmp/oracle-jdk/
+
+RUN set -eux; \
+    [ "${TARGETARCH}" = "amd64" ]; \
+    [ "${ORACLE_JDK8_ACCEPT_BCL}" = "Y" ]; \
+    [ "${ORACLE_JDK8_ARCHIVE}" = "jdk-8u202-linux-x64.tar.gz" ]; \
+    echo "${ORACLE_JDK8_SHA256}  /tmp/oracle-jdk/${ORACLE_JDK8_ARCHIVE}" | sha256sum -c -; \
+    mkdir -p /tmp/oracle-extract; \
+    tar -xzf "/tmp/oracle-jdk/${ORACLE_JDK8_ARCHIVE}" -C /tmp/oracle-extract; \
+    jdk_root="$(find /tmp/oracle-extract -mindepth 1 -maxdepth 1 -type d -name 'jdk1.8.0_202' -print -quit)"; \
+    [ -n "${jdk_root}" ]; \
+    [ -x "${jdk_root}/bin/java" ]; \
+    rm -rf /opt/java/openjdk; \
+    mv "${jdk_root}" /opt/java/openjdk; \
+    /opt/java/openjdk/bin/java -version 2>&1 | grep '1.8.0_202'; \
+    rm -rf /tmp/oracle-jdk /tmp/oracle-extract
+
+RUN set -eux; \
+    rm -rf /usr/local/tomcat/webapps/*; \
+    if [ -d /usr/local/tomcat/webapps.dist/ROOT ]; then \
+      cp -a /usr/local/tomcat/webapps.dist/ROOT /usr/local/tomcat/webapps/ROOT; \
+    fi
+
+COPY secrets-entrypoint /usr/local/bin/oneinstack-secrets-entrypoint
+RUN chmod 0755 /usr/local/bin/oneinstack-secrets-entrypoint
+
+EXPOSE 8080
+
+ENTRYPOINT ["oneinstack-secrets-entrypoint"]

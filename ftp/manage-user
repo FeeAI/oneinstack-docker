@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+password_file=/etc/pure-ftpd/pureftpd.passwd
+database_file=/etc/pure-ftpd/pureftpd.pdb
+command="${1:-list}"
+username="${2:-}"
+directory="${3:-${username}}"
+
+case "${command}" in
+  add)
+    [ -n "${username}" ] || { echo "Usage: ftp-user add USER [DIRECTORY]" >&2; exit 1; }
+    case "${username}" in *[!A-Za-z0-9_.-]*|'') echo "Invalid FTP username." >&2; exit 1 ;; esac
+    case "${directory}" in /*|*..*) echo "FTP directory must stay below /var/www/html." >&2; exit 1 ;; esac
+    mkdir -p "/var/www/html/${directory}"
+    chown -R ftpuser:ftpgroup "/var/www/html/${directory}"
+    pure-pw useradd "${username}" \
+      -f "${password_file}" \
+      -m \
+      -u ftpuser \
+      -d "/var/www/html/${directory}"
+    ;;
+  delete | del)
+    [ -n "${username}" ] || { echo "Usage: ftp-user delete USER" >&2; exit 1; }
+    pure-pw userdel "${username}" -f "${password_file}" -m
+    ;;
+  passwd)
+    [ -n "${username}" ] || { echo "Usage: ftp-user passwd USER" >&2; exit 1; }
+    pure-pw passwd "${username}" -f "${password_file}" -m
+    ;;
+  list)
+    pure-pw list -f "${password_file}"
+    ;;
+  *)
+    echo "Usage: ftp-user {add USER [DIRECTORY]|delete USER|passwd USER|list}" >&2
+    exit 1
+    ;;
+esac
+
+[ -f "${database_file}" ] || pure-pw mkdb "${database_file}" -f "${password_file}"

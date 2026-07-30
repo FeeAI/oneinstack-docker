@@ -1,0 +1,70 @@
+#!/bin/sh
+set -eu
+
+password_file=/etc/pure-ftpd/pureftpd.passwd
+database_file=/etc/pure-ftpd/pureftpd.pdb
+tls_mode="${FTP_TLS_MODE:-required}"
+tls_domain="${FTP_TLS_DOMAIN:-}"
+tls_pem=/run/pure-ftpd/pure-ftpd.pem
+
+if [ "$(id -g ftpuser)" != "${APP_GID:-1000}" ]; then
+  groupmod -o -g "${APP_GID:-1000}" ftpgroup
+fi
+if [ "$(id -u ftpuser)" != "${APP_UID:-1000}" ]; then
+  usermod -o -u "${APP_UID:-1000}" -g "${APP_GID:-1000}" ftpuser
+fi
+
+touch "${password_file}"
+chmod 0600 "${password_file}"
+if [ ! -f "${database_file}" ]; then
+  pure-pw mkdb "${database_file}" -f "${password_file}"
+fi
+
+set -- \
+  -c "${FTP_MAX_CLIENTS:-50}" \
+  -C "${FTP_MAX_CLIENTS_PER_IP:-5}" \
+  -E \
+  -j \
+  -l "puredb:${database_file}" \
+  -p "${FTP_PASSIVE_START:-30000}:${FTP_PASSIVE_END:-30009}" \
+  -R
+
+if [ -n "${FTP_PUBLIC_HOST:-}" ]; then
+  set -- "$@" -P "${FTP_PUBLIC_HOST}"
+fi
+
+case "${tls_mode}" in
+  required | optional)
+    [ -n "${tls_domain}" ] || {
+      echo "FTP_TLS_DOMAIN is required when FTPS is enabled." >&2
+      exit 1
+    }
+    certificate_dir="/etc/letsencrypt/live/${tls_domain}"
+    [ -r "${certificate_dir}/fullchain.pem" ] || {
+      echo "FTPS certificate not found: ${certificate_dir}/fullchain.pem" >&2
+      exit 1
+    }
+    [ -r "${certificate_dir}/privkey.pem" ] || {
+      echo "FTPS private key not found: ${certificate_dir}/privkey.pem" >&2
+      exit 1
+    }
+    mkdir -p "$(dirname "${tls_pem}")"
+    cat "${certificate_dir}/fullchain.pem" "${certificate_dir}/privkey.pem" >"${tls_pem}"
+    chmod 0600 "${tls_pem}"
+    if [ "${tls_mode}" = "required" ]; then
+      set -- "$@" -Y 3 -2 "${tls_pem}"
+    else
+      echo "Warning: FTP_TLS_MODE=optional permits unencrypted FTP clients." >&2
+      set -- "$@" -Y 1 -2 "${tls_pem}"
+    fi
+    ;;
+  off)
+    echo "Warning: FTP_TLS_MODE=off sends FTP credentials and data without TLS." >&2
+    ;;
+  *)
+    echo "FTP_TLS_MODE must be required, optional or off." >&2
+    exit 1
+    ;;
+esac
+
+exec pure-ftpd "$@"
