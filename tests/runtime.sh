@@ -10,6 +10,7 @@ MANAGER=("${DOCKER_DIR}/oneinstack" --env-file "${ENV_FILE}")
 KEEP_RUNTIME_DATA="${KEEP_RUNTIME_DATA:-0}"
 HTTP_PORT="${ONEINSTACK_TEST_HTTP_PORT:-18080}"
 HTTPS_PORT="${ONEINSTACK_TEST_HTTPS_PORT:-18443}"
+HTTP_RESPONSE=""
 
 # shellcheck source=../scripts/env.sh
 # shellcheck disable=SC1091
@@ -70,12 +71,16 @@ env_set "${ENV_FILE}" DATABASE_MEMORY_LIMIT 1g
 "${MANAGER[@]}" config --quiet
 "${MANAGER[@]}" up
 
-curl --fail --silent --show-error \
-  "http://127.0.0.1:${HTTP_PORT}/healthz" |
-  grep -q '^ok$'
-curl --fail --silent --show-error \
-  "http://127.0.0.1:${HTTP_PORT}/" |
-  grep -q 'OneinStack Docker stack is running'
+HTTP_RESPONSE="$(
+  curl --fail --silent --show-error "http://127.0.0.1:${HTTP_PORT}/healthz"
+)"
+[[ "${HTTP_RESPONSE}" == "ok" ]] ||
+  { printf '[runtime] Unexpected health response: %s\n' "${HTTP_RESPONSE}" >&2; exit 1; }
+HTTP_RESPONSE="$(
+  curl --fail --silent --show-error "http://127.0.0.1:${HTTP_PORT}/"
+)"
+grep -q '^OneinStack Docker is running\.$' <<<"${HTTP_RESPONSE}" ||
+  { printf '[runtime] Unexpected home response: %s\n' "${HTTP_RESPONSE}" >&2; exit 1; }
 
 "${MANAGER[@]}" php-ext verify
 "${MANAGER[@]}" compose exec -T mysql sh -c \
@@ -100,9 +105,11 @@ BACKUP_DIR="$(
 
 "${MANAGER[@]}" restart
 "${MANAGER[@]}" up
-curl --fail --silent --show-error \
-  "http://127.0.0.1:${HTTP_PORT}/healthz" |
-  grep -q '^ok$'
+HTTP_RESPONSE="$(
+  curl --fail --silent --show-error "http://127.0.0.1:${HTTP_PORT}/healthz"
+)"
+[[ "${HTTP_RESPONSE}" == "ok" ]] ||
+  { printf '[runtime] Unexpected health response after restart: %s\n' "${HTTP_RESPONSE}" >&2; exit 1; }
 
 docker image inspect \
   oneinstack/php:8.4 \

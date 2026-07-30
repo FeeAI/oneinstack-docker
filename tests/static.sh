@@ -11,6 +11,7 @@ cleanup() {
   rm -rf -- "${TEST_DIR}"
 }
 trap cleanup EXIT
+trap 'printf "Static check failed at line %s.\n" "${LINENO}" >&2' ERR
 
 test_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
