@@ -115,6 +115,6 @@ docker image inspect \
   oneinstack/php:8.4 \
   oneinstack/nginx:stable \
   oneinstack/mysql:8.4 \
-  --format '{{.Id}} {{join .RepoTags ","}} {{join .RepoDigests ","}}'
+  --format '{{.Id}} {{json .RepoTags}} {{json .RepoDigests}}'
 
 printf 'OneinStack Docker runtime acceptance passed.\n'

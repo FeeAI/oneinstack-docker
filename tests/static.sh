@@ -21,6 +21,14 @@ test_sha256() {
   fi
 }
 
+test_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
 bash -n \
   "${DOCKER_DIR}/oneinstack" \
   "${DOCKER_DIR}/scripts/env.sh" \
@@ -181,7 +189,7 @@ fi
 ONEINSTACK_DEFAULT_DATA_DIR="${TEST_DATA_DIR}" \
   "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" init >/dev/null
 TEST_DATA_DIR="$(CDPATH='' cd -- "${TEST_DATA_DIR}" && pwd -P)"
-[[ "$(stat -f '%Lp' "${TEST_ENV}" 2>/dev/null || stat -c '%a' "${TEST_ENV}")" == "600" ]]
+[[ "$(test_mode "${TEST_ENV}")" == "600" ]]
 grep -q '^COMPOSE_PROFILES=web-nginx,db-mysql$' "${TEST_ENV}"
 grep -q '^WEB_ENGINE=nginx$' "${TEST_ENV}"
 grep -q '^DATABASE_ENGINE=mysql$' "${TEST_ENV}"
@@ -204,7 +212,7 @@ fi
 for secret_name in database_password mysql_root_password mongodb_root_password redis_password; do
   secret_file="${TEST_DATA_DIR}/secrets/${secret_name}"
   [[ -s "${secret_file}" ]]
-  [[ "$(stat -f '%Lp' "${secret_file}" 2>/dev/null || stat -c '%a' "${secret_file}")" == "600" ]]
+  [[ "$(test_mode "${secret_file}")" == "600" ]]
 done
 if grep -Eq '^(DATABASE_PASSWORD|MYSQL_ROOT_PASSWORD|MONGODB_ROOT_PASSWORD|REDIS_PASSWORD)=.+' \
   "${TEST_ENV}"; then
@@ -237,8 +245,7 @@ printf 'configured-redis-password\n' |
   "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
     secret set redis --path "${CUSTOM_REDIS_SECRET}" --stdin >/dev/null
 [[ "$(cat "${CUSTOM_REDIS_SECRET}")" == "configured-redis-password" ]]
-[[ "$(stat -f '%Lp' "$(dirname -- "${CUSTOM_REDIS_SECRET}")" 2>/dev/null ||
-  stat -c '%a' "$(dirname -- "${CUSTOM_REDIS_SECRET}")")" == "755" ]]
+[[ "$(test_mode "$(dirname -- "${CUSTOM_REDIS_SECRET}")")" == "755" ]]
 grep -q "^REDIS_PASSWORD_FILE=${CUSTOM_REDIS_SECRET}$" "${TEST_ENV}"
 if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
   secret set redis --path /etc/passwd --generate >/dev/null 2>&1; then
@@ -308,8 +315,7 @@ grep -q 'SHA-256 fingerprint:' <<<"${FTP_UP_ERROR}"
 grep -q 'Docker is not installed' <<<"${FTP_UP_ERROR}"
 [[ -f "${TEST_DATA_DIR}/certs/live/ftp.example.com/fullchain.pem" ]]
 [[ -f "${TEST_DATA_DIR}/certs/live/ftp.example.com/privkey.pem" ]]
-[[ "$(stat -f '%Lp' "${TEST_DATA_DIR}/certs/live/ftp.example.com/privkey.pem" 2>/dev/null ||
-  stat -c '%a' "${TEST_DATA_DIR}/certs/live/ftp.example.com/privkey.pem")" == "600" ]]
+[[ "$(test_mode "${TEST_DATA_DIR}/certs/live/ftp.example.com/privkey.pem")" == "600" ]]
 if grep -q -- 'BEGIN PRIVATE KEY' <<<"${FTP_UP_ERROR}"; then
   printf 'Automatic FTPS setup printed the private key content.\n' >&2
   exit 1
