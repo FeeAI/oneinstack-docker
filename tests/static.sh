@@ -307,8 +307,19 @@ cmp "${TEST_ENV}" "${TEST_ENV}.before"
   configure --enable ftp --ftp-tls-domain ftp.example.com >/dev/null
 grep -q '^FTP_TLS_MODE=required$' "${TEST_ENV}"
 grep -q '^FTP_TLS_DOMAIN=ftp.example.com$' "${TEST_ENV}"
+mkdir -p "${TEST_DIR}/no-docker-bin"
+printf '%s\n' '#!/bin/sh' 'exit 1' >"${TEST_DIR}/no-docker-bin/docker"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "Docker is not installed in this test fixture.\\n" >&2' \
+  'exit 1' \
+  >"${TEST_DIR}/no-docker-bin/docker-compose"
+chmod 0755 \
+  "${TEST_DIR}/no-docker-bin/docker" \
+  "${TEST_DIR}/no-docker-bin/docker-compose"
 FTP_UP_ERROR="$(
-  "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" up 2>&1 || true
+  PATH="${TEST_DIR}/no-docker-bin:${PATH}" \
+    "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" up 2>&1 || true
 )"
 grep -q 'Generated a self-signed certificate for ftp.example.com' <<<"${FTP_UP_ERROR}"
 grep -q 'SHA-256 fingerprint:' <<<"${FTP_UP_ERROR}"
