@@ -39,7 +39,10 @@ COPY --from=builder /usr/local/tengine /usr/local/tengine
 COPY nginx.conf /usr/local/tengine/conf/nginx.conf
 COPY conf.d /usr/local/tengine/conf/conf.d
 
-RUN /usr/local/tengine/sbin/nginx -t
+RUN cp /usr/local/tengine/conf/conf.d/default.conf /tmp/default.conf \
+    && sed -i 's/fastcgi_pass php:9000;/fastcgi_pass 127.0.0.1:9000;/' /usr/local/tengine/conf/conf.d/default.conf \
+    && /usr/local/tengine/sbin/nginx -t \
+    && mv /tmp/default.conf /usr/local/tengine/conf/conf.d/default.conf
 
 EXPOSE 80 443
 

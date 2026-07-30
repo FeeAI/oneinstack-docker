@@ -162,6 +162,11 @@ grep -q 'ORACLE_JDK8_ACCEPT_BCL.*=.*Y' "${DOCKER_DIR}/tomcat/Dockerfile.oracle8"
 grep -q 'sha256sum -c' "${DOCKER_DIR}/tomcat/Dockerfile.oracle8"
 grep -q 'TENGINE_SHA256' "${DOCKER_DIR}/tengine/Dockerfile"
 grep -q 'sha256sum -c' "${DOCKER_DIR}/tengine/Dockerfile"
+for web_dockerfile in nginx openresty tengine; do
+  grep -q 'fastcgi_pass 127.0.0.1:9000' \
+    "${DOCKER_DIR}/${web_dockerfile}/Dockerfile"
+  grep -q 'mv /tmp/default.conf' "${DOCKER_DIR}/${web_dockerfile}/Dockerfile"
+done
 grep -q 'set -- "\$@" -Y 3 -2' "${DOCKER_DIR}/ftp/entrypoint"
 grep -q "chown -R mysql:mysql /var/lib/mysql" \
   "${DOCKER_DIR}/percona/secrets-entrypoint"
@@ -193,6 +198,7 @@ TEST_DATA_DIR="$(CDPATH='' cd -- "${TEST_DATA_DIR}" && pwd -P)"
 grep -q '^COMPOSE_PROFILES=web-nginx,db-mysql$' "${TEST_ENV}"
 grep -q '^WEB_ENGINE=nginx$' "${TEST_ENV}"
 grep -q '^DATABASE_ENGINE=mysql$' "${TEST_ENV}"
+grep -q '^MYSQL_VERSION=8.4$' "${TEST_ENV}"
 grep -q "^ONEINSTACK_DATA_DIR=${TEST_DATA_DIR}$" "${TEST_ENV}"
 grep -q "^DATABASE_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/database_password$" "${TEST_ENV}"
 grep -q "^MYSQL_ROOT_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/mysql_root_password$" "${TEST_ENV}"
@@ -228,6 +234,7 @@ if grep -q "$(cat "${TEST_DATA_DIR}/secrets/database_password")" <<<"${SECRET_ST
   exit 1
 fi
 SHOW_CONFIG="$("${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" show-config)"
+grep -q '^Database: *mysql:8.4 (mysql:3306)$' <<<"${SHOW_CONFIG}"
 grep -q '^Secret sources:$' <<<"${SHOW_CONFIG}"
 grep -q "^redis *configured ${TEST_DATA_DIR}/secrets/redis_password$" \
   <<<"${SHOW_CONFIG}"
@@ -247,6 +254,37 @@ printf 'configured-redis-password\n' |
 [[ "$(cat "${CUSTOM_REDIS_SECRET}")" == "configured-redis-password" ]]
 [[ "$(test_mode "$(dirname -- "${CUSTOM_REDIS_SECRET}")")" == "755" ]]
 grep -q "^REDIS_PASSWORD_FILE=${CUSTOM_REDIS_SECRET}$" "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db mysql:8.0 >/dev/null
+grep -q '^DATABASE_ENGINE=mysql$' "${TEST_ENV}"
+grep -q '^MYSQL_VERSION=8.0$' "${TEST_ENV}"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db mysql >/dev/null
+grep -q '^MYSQL_VERSION=8.0$' "${TEST_ENV}"
+
+for database_case in \
+  mariadb:11.8:MARIADB_VERSION \
+  percona:8.4.6:PERCONA_VERSION \
+  postgresql:17:POSTGRES_VERSION \
+  mongodb:8.0:MONGODB_VERSION; do
+  database_spec="${database_case%:*}"
+  version_key="${database_case##*:}"
+  database_version="${database_spec#*:}"
+  "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+    configure --db "${database_spec}" >/dev/null
+  grep -q "^${version_key}=${database_version}$" "${TEST_ENV}"
+done
+
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+for invalid_database in mysql: mysql:8.0@sha none:1; do
+  if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+    configure --db "${invalid_database}" >/dev/null 2>&1; then
+    printf 'Invalid database version was accepted: %s\n' "${invalid_database}" >&2
+    exit 1
+  fi
+  cmp "${TEST_ENV}" "${TEST_ENV}.before"
+done
 if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
   secret set redis --path /etc/passwd --generate >/dev/null 2>&1; then
   printf 'An unsafe secret target was accepted.\n' >&2

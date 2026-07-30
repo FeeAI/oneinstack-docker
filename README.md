@@ -40,7 +40,8 @@ for the four secret sources; service password values are not stored inline in
 ## Select the stack
 
 ```bash
-./oneinstack configure --web openresty --db mariadb
+./oneinstack configure --web openresty --db mysql:8.0
+./oneinstack configure --db mariadb
 ./oneinstack configure --web caddy --db postgresql --enable adminer
 ./oneinstack configure --php 8.5 \
   --extensions imagick,redis,memcached,mongodb,pgsql,swoole
@@ -53,6 +54,19 @@ for the four secret sources; service password values are not stored inline in
 
 Configuration updates are transactional. Invalid combinations leave `.env`
 unchanged.
+
+`--db` accepts `ENGINE[:VERSION]`. A version suffix overrides the matching
+image version in `.env`; omitting it preserves the existing `.env` value:
+
+```bash
+./oneinstack configure --db mysql:8.0       # sets MYSQL_VERSION=8.0
+./oneinstack configure --db mariadb:11.8    # sets MARIADB_VERSION=11.8
+./oneinstack configure --db mysql           # keeps the current MYSQL_VERSION
+```
+
+The same form applies to `percona`, `postgresql` and `mongodb`; for example,
+`postgresql:17` sets `POSTGRES_VERSION=17` (the PostgreSQL builder adds its
+Alpine variant). Version values must use Docker-tag-safe characters.
 
 ## Shared service networks
 

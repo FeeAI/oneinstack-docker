@@ -73,7 +73,8 @@ Commands:
   compose ARGS...       Pass arguments directly to Docker Compose
 
 Configure examples:
-  ./oneinstack configure --web openresty --db mariadb
+  ./oneinstack configure --web openresty --db mysql:8.0
+  ./oneinstack configure --db mariadb
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
   ./oneinstack configure --extensions sqlsrv --accept-microsoft-eula
   ./oneinstack configure --pecl-extra uuid@uuid-1.3.0
@@ -699,6 +700,25 @@ selected_database_service() {
   env_get "${ENV_FILE}" DATABASE_ENGINE mysql
 }
 
+database_version_key() {
+  case "$1" in
+    mysql) printf '%s\n' MYSQL_VERSION ;;
+    mariadb) printf '%s\n' MARIADB_VERSION ;;
+    percona) printf '%s\n' PERCONA_VERSION ;;
+    postgresql) printf '%s\n' POSTGRES_VERSION ;;
+    mongodb) printf '%s\n' MONGODB_VERSION ;;
+    *) return 1 ;;
+  esac
+}
+
+selected_database_version() {
+  local database="$1"
+  local version_key
+
+  version_key="$(database_version_key "${database}")" || return 0
+  env_get "${ENV_FILE}" "${version_key}"
+}
+
 validate_certificate_domain() {
   local domain="$1"
 
@@ -825,6 +845,9 @@ configure_stack() {
   local temporary_env_file
   local web=""
   local database=""
+  local database_spec=""
+  local database_version=""
+  local version_key=""
   local php_version=""
   local php_extensions=""
   local enable_features=""
@@ -853,7 +876,7 @@ configure_stack() {
   while (($# > 0)); do
     case "$1" in
       --web) web="${2:?--web requires a value}"; shift 2 ;;
-      --db | --database) database="${2:?--db requires a value}"; shift 2 ;;
+      --db | --database) database_spec="${2:?--db requires ENGINE[:VERSION]}"; shift 2 ;;
       --php) php_version="${2:?--php requires a version}"; shift 2 ;;
       --extensions) php_extensions="${2:?--extensions requires a comma-separated list}"; shift 2 ;;
       --pecl-extra)
@@ -889,9 +912,24 @@ configure_stack() {
     env_set "${ENV_FILE}" WEB_ENGINE "${web}"
   fi
 
-  if [[ -n "${database}" ]]; then
+  if [[ -n "${database_spec}" ]]; then
+    database="${database_spec%%:*}"
+    if [[ "${database_spec}" == *:* ]]; then
+      database_version="${database_spec#*:}"
+      [[ -n "${database_version}" ]] ||
+        fail "Database version must not be empty."
+      if [[ ! "${database_version}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
+        ((${#database_version} > 128)); then
+        fail "Database version must be a valid Docker image tag."
+      fi
+    fi
     [[ "${database}" =~ ^(mysql|mariadb|percona|postgresql|mongodb|none)$ ]] ||
       fail "Database must be mysql, mariadb, percona, postgresql, mongodb or none."
+    if [[ -n "${database_version}" ]]; then
+      version_key="$(database_version_key "${database}")" ||
+        fail "Database 'none' does not accept a version."
+      env_set "${ENV_FILE}" "${version_key}" "${database_version}"
+    fi
     env_set "${ENV_FILE}" DATABASE_ENGINE "${database}"
     case "${database}" in
       mysql | mariadb | percona)
@@ -1384,17 +1422,25 @@ start_selected_dependencies() {
 
 show_selected_config() {
   local additional_php
+  local database
+  local database_label
+  local database_version
   local extra_pecl
 
   require_env_file
   additional_php="$(env_get "${ENV_FILE}" ADDITIONAL_PHP)"
   [[ -n "${additional_php}" ]] || additional_php="none"
+  database="$(selected_database_service)"
+  database_version="$(selected_database_version "${database}")"
+  database_label="${database}"
+  [[ -z "${database_version}" ]] ||
+    database_label="${database}:${database_version}"
   extra_pecl="$(env_get "${ENV_FILE}" PHP_EXTRA_PECL_PACKAGES)"
   [[ -n "${extra_pecl}" ]] || extra_pecl="none"
 
   printf 'Web:              %s\n' "$(selected_web_service)"
   printf 'Database:         %s (%s:%s)\n' \
-    "$(selected_database_service)" \
+    "${database_label}" \
     "$(env_get "${ENV_FILE}" DATABASE_HOST -)" \
     "$(env_get "${ENV_FILE}" DATABASE_PORT -)"
   printf 'PHP:              %s [%s]\n' \

@@ -39,7 +39,8 @@ cd docker
 `configure` 事务式更新 `.env`，全部组合校验通过后才会替换原配置：
 
 ```bash
-./oneinstack configure --web openresty --db mariadb
+./oneinstack configure --web openresty --db mysql:8.0
+./oneinstack configure --db mariadb
 ./oneinstack configure --web caddy --db postgresql --enable adminer
 ./oneinstack configure --php 8.5 \
   --extensions imagick,redis,memcached,mongodb,pgsql,swoole
@@ -48,6 +49,19 @@ cd docker
 ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 ./oneinstack configure --disable memcached,tomcat
 ```
+
+`--db` 支持 `ENGINE[:VERSION]`。指定版本时覆盖 `.env` 中对应的镜像版本；
+不指定版本时保留 `.env` 现有值：
+
+```bash
+./oneinstack configure --db mysql:8.0       # 写入 MYSQL_VERSION=8.0
+./oneinstack configure --db mariadb:11.8    # 写入 MARIADB_VERSION=11.8
+./oneinstack configure --db mysql           # 保留当前 MYSQL_VERSION
+```
+
+`percona`、`postgresql`、`mongodb` 同样支持该格式；例如
+`postgresql:17` 会写入 `POSTGRES_VERSION=17`，PostgreSQL 构建器会自动选择
+Alpine 变体。版本值只能使用 Docker tag 安全字符。
 
 修改选择后执行 `./oneinstack up`，Compose 会构建并重建需要的服务。
 
