@@ -14,7 +14,7 @@ are repeated inside an image.
 | --- | --- | --- |
 | Stack selection and installation | Implemented | Transactional selection, local builds, health checks and Compose profiles |
 | Web servers, virtual hosts and proxies | Implemented | Nginx, Tengine, OpenResty, Caddy, Apache, UI-managed Nginx Proxy Manager and APISIX API Gateway; PHP/static/Node/Tomcat/custom proxy sites |
-| Database families and administration | Implemented | MySQL 8.4/9.7 LTS, MariaDB, Percona, PostgreSQL, MongoDB; phpMyAdmin and Adminer |
+| Database families and administration | Implemented | MySQL 8.4/9.7 LTS; MariaDB 10.11/11.4/11.8; Percona 8.4; PostgreSQL 15-18; MongoDB 7.0/8.0/8.3; phpMyAdmin and Adminer |
 | PHP, multi-PHP, extensions and Composer | Implemented with gaps | Currently supported PHP 8.2-8.5 branches, parallel FPM, Composer, selectable extensions, pinned extra PECL and private binary hooks |
 | Java/Tomcat and Node.js | Implemented | Tomcat 9/10/11 on Docker Official Image variants for maintained Temurin 8/11/17/21/25 LTS lines, plus Node.js |
 | Redis, Memcached and Pure-FTPd | Implemented | Persistent Redis, isolated Memcached and FTPS virtual users |
@@ -26,8 +26,11 @@ are repeated inside an image.
 ## Deliberate gaps
 
 - End-of-life PHP, Tomcat and database releases are not presented as maintained
-  choices. PHP follows php.net's supported branches, MySQL accepts LTS tracks
-  only, and open-source JDK choices follow Temurin LTS availability.
+  choices. PHP follows php.net's supported branches. Database tracks need at
+  least one year of regular public maintenance remaining; paid extended or
+  post-EOL support does not qualify. The explicit rolling `latest` value tracks
+  the official upstream container tag and is not a curated lifecycle claim.
+  Open-source JDK choices follow Temurin LTS availability.
 - Proprietary PHP loaders are not redistributed. ABI-matched vendor modules can
   be supplied through `php/custom`; their licensing remains the deployer's
   responsibility. Gmagick is not built in because its latest PECL release is

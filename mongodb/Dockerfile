@@ -1,4 +1,4 @@
-ARG MONGODB_VERSION=8.0
+ARG MONGODB_VERSION=8.3
 FROM mongo:${MONGODB_VERSION}
 
 LABEL org.opencontainers.image.title="OneinStack MongoDB"

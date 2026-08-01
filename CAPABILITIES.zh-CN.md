@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 技术栈选择与安装 | 已实现 | 事务化选择、本地构建、健康检查和 Compose profiles |
 | Web 服务器、虚拟主机与代理 | 已实现 | Nginx、Tengine、OpenResty、Caddy、Apache、UI 管理的 Nginx Proxy Manager 和 APISIX API Gateway；支持 PHP、静态、Node、Tomcat 和自定义代理站点 |
-| 数据库类型与管理 | 已实现 | MySQL 8.4/9.7 LTS、MariaDB、Percona、PostgreSQL、MongoDB；phpMyAdmin 和 Adminer |
+| 数据库类型与管理 | 已实现 | MySQL 8.4/9.7 LTS；MariaDB 10.11/11.4/11.8；Percona 8.4；PostgreSQL 15-18；MongoDB 7.0/8.0/8.3；phpMyAdmin 和 Adminer |
 | PHP、多 PHP、扩展与 Composer | 已实现，但有缺口 | 当前受支持的 PHP 8.2-8.5 分支、并行 FPM、Composer、可选扩展、固定版本的额外 PECL 扩展和私有二进制注入点 |
 | Java/Tomcat 与 Node.js | 已实现 | Tomcat 9/10/11 使用 Docker Official Image 提供的 Temurin 8/11/17/21/25 LTS 变体，另支持 Node.js |
 | Redis、Memcached 与 Pure-FTPd | 已实现 | Redis 持久化、Memcached 隔离和 FTPS 虚拟用户 |
@@ -24,7 +24,9 @@
 ## 明确保留的缺口
 
 - 停止支持的 PHP、Tomcat 和数据库版本不再作为受维护选项。PHP 跟随
-  php.net 当前支持分支，MySQL 仅接受 LTS 轨道，开源 JDK 跟随 Temurin LTS 可用性。
+  php.net 当前支持分支；数据库系列的常规公开维护期必须至少还剩一年，付费延长或
+  EOL 后支持不计入。显式滚动值 `latest` 跟随上游官方容器标签，不代表经过维护期
+  筛选；开源 JDK 跟随 Temurin LTS 可用性。
 - 不再分发专有 PHP 加载器。可通过 `php/custom` 提供 ABI 匹配的厂商模块，其许可
   合规由部署者负责。Gmagick 未内置，因为其最新 PECL 版本仍是发布候选版。
 - 不提供缺少持续维护上游容器镜像来源的 JDK 发行版。仍受维护的 Temurin LTS

@@ -112,7 +112,7 @@ HTTP_RESPONSE="$(
   { printf '[runtime] Unexpected health response after restart: %s\n' "${HTTP_RESPONSE}" >&2; exit 1; }
 
 docker image inspect \
-  oneinstack/php:8.4 \
+  oneinstack/php:8.5 \
   oneinstack/nginx:stable \
   oneinstack/mysql:9.7 \
   --format '{{.Id}} {{json .RepoTags}} {{json .RepoDigests}}'

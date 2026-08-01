@@ -10,10 +10,13 @@
 ## 支持范围
 
 - Web：Nginx、Tengine、OpenResty、Caddy、Apache、Nginx Proxy Manager
-- 数据库：MySQL、MariaDB、Percona、PostgreSQL、MongoDB
-- 运行时：PHP 8.2-8.5、多 PHP、Composer、Node.js、Tomcat 9/10/11
+- 数据库：MySQL 8.4/9.7；MariaDB 10.11/11.4/11.8；Percona 8.4；
+  PostgreSQL 15/16/17/18；MongoDB 7.0/8.0/8.3
+- 运行时：PHP 8.2/8.3/8.4/8.5、多 PHP、Composer、Node.js 官方主版本标签、
+  Tomcat 9.0/10.1/11.0
 - Java：仍受维护的 Eclipse Temurin 8/11/17/21/25 LTS
-- 辅助服务：Apache APISIX、Redis、Memcached、phpMyAdmin、Adminer、TLS 优先的 Pure-FTPd
+- 辅助服务：Apache APISIX、Redis、Memcached、phpMyAdmin、Adminer、TLS 优先的
+  Pure-FTPd；镜像版本选项也接受上游标签
 - 运维：虚拟主机、反向代理、TLS、备份恢复、健康检查、升级和清理
 
 ## 快速开始
@@ -29,7 +32,7 @@ cd oneinstack-docker
 ./oneinstack up
 ```
 
-默认栈为 Nginx + PHP 8.4 + MySQL 9.7 LTS。未提供 `--data-dir` 时，初始化使用
+默认栈为 Nginx + PHP 8.5 + MySQL 9.7 LTS。未提供 `--data-dir` 时，初始化使用
 管理脚本旁的 `data`。初始化同时生成权限为 `0600` 的 `.env`、
 `secrets/` 下权限为 `0600` 的随机密钥文件以及托管目录标记，不会覆盖已有
 配置。生成的 `*_FILE` 是明确的服务密钥来源配置项，密钥值
@@ -50,10 +53,21 @@ cd oneinstack-docker
 ./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
 ./oneinstack configure --apisix 3.17.0-debian
 ./oneinstack configure --enable node,tomcat
-./oneinstack configure --tomcat 10.1 --jdk 25 --node 22
+./oneinstack configure --tomcat 10.1 --jdk 25 --node 24
 ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 ./oneinstack configure --disable memcached,tomcat
 ```
+
+`configure` 暴露的每个版本参数都额外接受特殊值 `latest`，并解析为对应官方上游
+容器镜像的滚动标签，包括 PHP、数据库、Redis、Memcached、Node.js、Tomcat、
+phpMyAdmin、Adminer 和 APISIX。必要的镜像变体会保留，例如 PHP 使用
+`php:fpm-bookworm`、Redis 使用 `redis:alpine`、Node.js 使用
+`node:bookworm-slim`。Tomcat 与 JDK 是同一个上游镜像组合；
+任一使用 `latest` 时都会选择完整的 `tomcat:latest`，因此两者显示版本都变为
+`latest`。并行 PHP 仍必须指定 8.2-8.5，因为 Compose 服务名包含明确分支。
+
+`latest` 是滚动标签，会跳过受维护系列白名单。固定默认值仍是面向生产环境的选择；
+只有能够接受上游自动跨主版本更新时才应使用 `latest`。
 
 `--db` 支持 `ENGINE[:VERSION]`。指定版本时覆盖 `.env` 中对应的镜像版本；
 不指定版本时保留 `.env` 现有值：
@@ -66,11 +80,23 @@ cd oneinstack-docker
 ```
 
 `percona`、`postgresql`、`mongodb` 同样支持该格式；例如
-`postgresql:17` 会写入 `POSTGRES_VERSION=17`，PostgreSQL 构建器会自动选择
-Alpine 变体。版本值只能使用 Docker tag 安全字符。
-MySQL 有意限制为仍受支持的 `8.4.x` 和 `9.7.x`
-[LTS 轨道](https://dev.mysql.com/doc/refman/8.4/en/mysql-releases.html)；旧版本和
-短周期 Innovation 标签会被拒绝。
+`postgresql:17` 会写入 `POSTGRES_VERSION=17`。版本值只能使用 Docker tag
+安全字符。
+除显式滚动值 `latest` 外，管理器仅接受常规公开维护期至少还剩一年的版本系列：
+
+- MySQL `8.4`、`9.7` LTS
+- MariaDB `10.11`、`11.4`、`11.8`（默认 `11.8`）
+- Percona Server `8.4`
+- PostgreSQL `15`、`16`、`17`、`18`
+- MongoDB `7.0`、`8.0`、`8.3`
+
+剩余维护期校验会读取当前日期；某个系列越过一年门槛后，即使仍在上述名单中也会
+被拒绝。付费延长支持或 EOL 后支持不计入维护期。具体依据各上游生命周期页面：
+[MySQL](https://dev.mysql.com/doc/refman/8.4/en/mysql-releases.html)、
+[MariaDB](https://mariadb.org/about/#maintenance-policy)、
+[Percona](https://www.percona.com/release-lifecycle-overview/)、
+[PostgreSQL](https://www.postgresql.org/support/versioning/) 和
+[MongoDB](https://www.mongodb.com/legal/support-policy/lifecycles)。
 
 Redis、Memcached、phpMyAdmin、Adminer 和 APISIX 通过各自的专用选项设置镜像
 版本。指定其中任一选项时也会自动启用对应服务：

@@ -1,4 +1,4 @@
-ARG MARIADB_VERSION=10.11
+ARG MARIADB_VERSION=11.8
 FROM mariadb:${MARIADB_VERSION}
 
 LABEL org.opencontainers.image.title="OneinStack MariaDB"

@@ -117,10 +117,11 @@ tomcat_build = tomcat.fetch("build")
 abort "Tomcat must use its fixed Dockerfile" if tomcat_build.key?("dockerfile")
 expected_tomcat_args = {
   "TOMCAT_VERSION" => "${TOMCAT_VERSION:-11.0}",
-  "JDK_VERSION" => "${JDK_VERSION:-25}"
+  "JDK_VERSION" => "${JDK_VERSION:-25}",
+  "TOMCAT_BASE_IMAGE" => "${TOMCAT_BASE_IMAGE:-tomcat:${TOMCAT_VERSION:-11.0}-jdk${JDK_VERSION:-25}-temurin}"
 }
 abort "unexpected Tomcat build arguments" unless tomcat_build.fetch("args") == expected_tomcat_args
-expected_tomcat_image = "oneinstack/tomcat:${TOMCAT_VERSION:-11.0}-temurin-jdk${JDK_VERSION:-25}"
+expected_tomcat_image = "oneinstack/tomcat:${TOMCAT_IMAGE_TAG:-${TOMCAT_VERSION:-11.0}-temurin-jdk${JDK_VERSION:-25}}"
 abort "unexpected Tomcat image name" unless tomcat["image"] == expected_tomcat_image
 
 expected_secrets = %w[
@@ -244,6 +245,8 @@ grep -Fq -- '--apisix VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--memcached VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--phpmyadmin VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--adminer VERSION' <<<"${CONFIGURE_HELP}"
+grep -Fq 'Every configure version option accepts latest.' <<<"${CONFIGURE_HELP}"
+grep -Fq 'preserving required FPM/Alpine/slim variants.' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--ftp-tls-mode MODE' <<<"${CONFIGURE_HELP}"
 if grep -qi 'oracle' <<<"${CONFIGURE_HELP}"; then
   printf 'Removed Oracle JDK options remain in configure help.\n' >&2
@@ -268,7 +271,11 @@ grep -q '^COMPOSE_PROFILES=web-nginx,db-mysql$' "${TEST_ENV}"
 grep -q '^WEB_ENGINE=nginx$' "${TEST_ENV}"
 grep -q '^DATABASE_ENGINE=mysql$' "${TEST_ENV}"
 grep -q '^MYSQL_VERSION=9.7$' "${TEST_ENV}"
+grep -q '^PHP_VERSION=8.5$' "${TEST_ENV}"
+grep -q '^MARIADB_VERSION=11.8$' "${TEST_ENV}"
+grep -q '^MONGODB_VERSION=8.3$' "${TEST_ENV}"
 grep -q '^JDK_VERSION=25$' "${TEST_ENV}"
+grep -q '^NODE_VERSION=24$' "${TEST_ENV}"
 grep -q "^ONEINSTACK_DATA_DIR=${TEST_DATA_DIR}$" "${TEST_ENV}"
 grep -q "^DATABASE_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/database_password$" "${TEST_ENV}"
 grep -q "^MYSQL_ROOT_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/mysql_root_password$" "${TEST_ENV}"
@@ -344,10 +351,17 @@ grep -q '^MYSQL_VERSION=8.4.10$' "${TEST_ENV}"
 grep -q '^MYSQL_VERSION=9.7$' "${TEST_ENV}"
 
 for database_case in \
+  mariadb:10.11:MARIADB_VERSION \
+  mariadb:11.4.5-noble:MARIADB_VERSION \
   mariadb:11.8:MARIADB_VERSION \
-  percona:8.4.6:PERCONA_VERSION \
+  percona:8.4.6-6.1:PERCONA_VERSION \
+  postgresql:15:POSTGRES_VERSION \
+  postgresql:16.4-alpine:POSTGRES_VERSION \
   postgresql:17:POSTGRES_VERSION \
-  mongodb:8.0:MONGODB_VERSION; do
+  postgresql:18:POSTGRES_VERSION \
+  mongodb:7.0:MONGODB_VERSION \
+  mongodb:8.0.14-noble:MONGODB_VERSION \
+  mongodb:8.3:MONGODB_VERSION; do
   database_spec="${database_case%:*}"
   version_key="${database_case##*:}"
   database_version="${database_spec#*:}"
@@ -357,7 +371,12 @@ for database_case in \
 done
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
-for invalid_database in mysql: mysql:8.0 mysql:9.6 mysql:9.7@sha none:1; do
+for invalid_database in \
+  mysql: mysql:8.0 mysql:9.6 mysql:9.7@sha \
+  mariadb:10.6 mariadb:12.3 \
+  percona:8.0 percona:9.7 \
+  postgresql:14 postgresql:19beta2 \
+  mongodb:6.0 mongodb:8.2 none:1; do
   if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
     configure --db "${invalid_database}" >/dev/null 2>&1; then
     printf 'Invalid database version was accepted: %s\n' "${invalid_database}" >&2
@@ -365,6 +384,36 @@ for invalid_database in mysql: mysql:8.0 mysql:9.6 mysql:9.7@sha none:1; do
   fi
   cmp "${TEST_ENV}" "${TEST_ENV}.before"
 done
+
+mkdir -p "${TEST_DIR}/future-date-bin"
+# Keep positional parameters literal for the generated date fixture.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "$1" = "-u" ] && [ "$2" = "+%F" ]; then' \
+  '  printf "%s\\n" 2028-05-30' \
+  'else' \
+  '  exec /bin/date "$@"' \
+  'fi' \
+  >"${TEST_DIR}/future-date-bin/date"
+chmod 0755 "${TEST_DIR}/future-date-bin/date"
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+if PATH="${TEST_DIR}/future-date-bin:${PATH}" \
+  "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db mariadb:11.4 >/dev/null 2>&1; then
+  printf 'A database track below the one-year maintenance threshold was accepted.\n' >&2
+  exit 1
+fi
+cmp "${TEST_ENV}" "${TEST_ENV}.before"
+
+cp "${TEST_ENV}" "${TEST_ENV}.before"
+env_set "${TEST_ENV}" DATABASE_ENGINE mariadb
+env_set "${TEST_ENV}" MARIADB_VERSION 10.6
+unsupported_database_output="$(
+  "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" config --quiet 2>&1 || true
+)"
+grep -q 'MariaDB must use a maintained' <<<"${unsupported_database_output}"
+mv "${TEST_ENV}.before" "${TEST_ENV}"
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
 if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
@@ -409,6 +458,44 @@ grep -q '^COMPOSE_PROFILES=.*memcached' "${TEST_ENV}"
 grep -q '^COMPOSE_PROFILES=.*tools-phpmyadmin' "${TEST_ENV}"
 grep -q '^COMPOSE_PROFILES=.*tools-adminer' "${TEST_ENV}"
 grep -q '^COMPOSE_PROFILES=.*feature-apisix' "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" configure \
+  --db mysql:latest --php latest --redis latest --memcached latest \
+  --node latest --tomcat latest --phpmyadmin latest --adminer latest \
+  --apisix latest >/dev/null
+grep -q '^MYSQL_VERSION=latest$' "${TEST_ENV}"
+grep -q '^PHP_VERSION=latest$' "${TEST_ENV}"
+grep -q '^PHP_BASE_IMAGE=php:fpm-bookworm$' "${TEST_ENV}"
+grep -q '^REDIS_BASE_IMAGE=redis:alpine$' "${TEST_ENV}"
+grep -q '^MEMCACHED_BASE_IMAGE=memcached:alpine$' "${TEST_ENV}"
+grep -q '^NODE_BASE_IMAGE=node:bookworm-slim$' "${TEST_ENV}"
+grep -q '^TOMCAT_VERSION=latest$' "${TEST_ENV}"
+grep -q '^JDK_VERSION=latest$' "${TEST_ENV}"
+grep -q '^TOMCAT_BASE_IMAGE=tomcat:latest$' "${TEST_ENV}"
+grep -q '^TOMCAT_IMAGE_TAG=latest$' "${TEST_ENV}"
+grep -q '^PHPMYADMIN_VERSION=latest$' "${TEST_ENV}"
+grep -q '^ADMINER_VERSION=latest$' "${TEST_ENV}"
+grep -q '^APISIX_VERSION=latest$' "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" configure \
+  --db mysql:9.7 --php 8.5 --redis 8.8 --memcached 1.6 --node 24 \
+  --tomcat 11.0 --jdk 25 --phpmyadmin 5-apache \
+  --adminer 5-standalone --apisix 3.17.0-debian >/dev/null
+grep -q '^PHP_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^REDIS_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^MEMCACHED_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^NODE_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^TOMCAT_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^TOMCAT_IMAGE_TAG=$' "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --jdk latest >/dev/null
+grep -q '^TOMCAT_VERSION=latest$' "${TEST_ENV}"
+grep -q '^JDK_VERSION=latest$' "${TEST_ENV}"
+grep -q '^TOMCAT_BASE_IMAGE=tomcat:latest$' "${TEST_ENV}"
+grep -q '^TOMCAT_IMAGE_TAG=latest$' "${TEST_ENV}"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --tomcat 11.0 --jdk 25 >/dev/null
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
 for invalid_option in redis memcached phpmyadmin adminer apisix; do

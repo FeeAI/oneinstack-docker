@@ -11,10 +11,13 @@ the current runtime acceptance status.
 ## Supported stack
 
 - Web: Nginx, Tengine, OpenResty, Caddy, Apache and Nginx Proxy Manager
-- Databases: MySQL, MariaDB, Percona, PostgreSQL and MongoDB
-- Runtimes: PHP 8.2-8.5, parallel PHP-FPM, Composer, Node.js and Tomcat 9-11
+- Databases: MySQL 8.4/9.7; MariaDB 10.11/11.4/11.8; Percona 8.4;
+  PostgreSQL 15/16/17/18; MongoDB 7.0/8.0/8.3
+- Runtimes: PHP 8.2/8.3/8.4/8.5, parallel PHP-FPM, Composer, Node.js
+  official major tags and Tomcat 9.0/10.1/11.0
 - Java: maintained Eclipse Temurin 8/11/17/21/25 LTS lines
-- Services: Apache APISIX, Redis, Memcached, phpMyAdmin, Adminer and TLS-first Pure-FTPd
+- Services: Apache APISIX, Redis, Memcached, phpMyAdmin, Adminer and TLS-first
+  Pure-FTPd; image-version options also accept upstream tags
 - Operations: sites, proxies, TLS, backup/restore, health checks and upgrades
 
 ## Quick start
@@ -30,7 +33,7 @@ cd oneinstack-docker
 ./oneinstack up
 ```
 
-The default is Nginx + PHP 8.4 + MySQL 9.7 LTS. `init` uses `data` beside the
+The default is Nginx + PHP 8.5 + MySQL 9.7 LTS. `init` uses `data` beside the
 manager script unless `--data-dir` is supplied. Initialization creates a mode
 `0600` `.env`, mode `0600` random secret files under the selected data root, and
 a managed-data marker; it never overwrites an existing environment file. The
@@ -51,7 +54,7 @@ service credentials; secret values are not stored inline in
 ./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
 ./oneinstack configure --apisix 3.17.0-debian
 ./oneinstack configure --enable node,tomcat
-./oneinstack configure --tomcat 10.1 --jdk 25 --node 22
+./oneinstack configure --tomcat 10.1 --jdk 25 --node 24
 ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 ./oneinstack configure --disable memcached,tomcat
 ./oneinstack up
@@ -59,6 +62,20 @@ service credentials; secret values are not stored inline in
 
 Configuration updates are transactional. Invalid combinations leave `.env`
 unchanged.
+
+Every version argument exposed by `configure` also accepts the special value
+`latest`. It resolves to the corresponding official upstream rolling tag,
+including PHP, databases, Redis, Memcached, Node.js, Tomcat, phpMyAdmin,
+Adminer and APISIX. Required image flavors are preserved: for example PHP uses
+`php:fpm-bookworm`, Redis uses `redis:alpine`, and Node.js uses
+`node:bookworm-slim`. For Tomcat, either `--tomcat latest` or
+`--jdk latest` selects the complete `tomcat:latest` image, so both displayed
+versions become `latest`. Parallel PHP runtimes still require an explicit
+8.2-8.5 branch because their Compose service names are versioned.
+
+`latest` is intentionally rolling and bypasses curated lifecycle-series
+selection. The pinned defaults remain the production-oriented choices; use
+`latest` only when automatic upstream major-version movement is acceptable.
 
 `--db` accepts `ENGINE[:VERSION]`. A version suffix overrides the matching
 image version in `.env`; omitting it preserves the existing `.env` value:
@@ -71,11 +88,25 @@ image version in `.env`; omitting it preserves the existing `.env` value:
 ```
 
 The same form applies to `percona`, `postgresql` and `mongodb`; for example,
-`postgresql:17` sets `POSTGRES_VERSION=17` (the PostgreSQL builder adds its
-Alpine variant). Version values must use Docker-tag-safe characters.
-MySQL is intentionally restricted to the supported `8.4.x` and `9.7.x`
-[LTS tracks](https://dev.mysql.com/doc/refman/8.4/en/mysql-releases.html);
-old and short-lived Innovation tags are rejected.
+`postgresql:17` sets `POSTGRES_VERSION=17`. Version values must use
+Docker-tag-safe characters.
+The manager only accepts tracks with at least one year of regular public
+maintenance remaining, unless the explicit rolling value `latest` is used:
+
+- MySQL `8.4` and `9.7` LTS
+- MariaDB `10.11`, `11.4` and `11.8` (default `11.8`)
+- Percona Server `8.4`
+- PostgreSQL `15`, `16`, `17` and `18`
+- MongoDB `7.0`, `8.0` and `8.3`
+
+The remaining-maintenance check is date-aware, so a listed track is rejected
+after it crosses the one-year threshold. Paid extended or post-EOL support is
+not counted. The policy follows the upstream lifecycle pages for
+[MySQL](https://dev.mysql.com/doc/refman/8.4/en/mysql-releases.html),
+[MariaDB](https://mariadb.org/about/#maintenance-policy),
+[Percona](https://www.percona.com/release-lifecycle-overview/),
+[PostgreSQL](https://www.postgresql.org/support/versioning/) and
+[MongoDB](https://www.mongodb.com/legal/support-policy/lifecycles).
 
 Redis, Memcached, phpMyAdmin, Adminer and APISIX accept image versions through their
 dedicated options. Supplying one of these options also enables that service:

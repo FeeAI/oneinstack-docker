@@ -1,6 +1,7 @@
 ARG TOMCAT_VERSION=11.0
 ARG JDK_VERSION=25
-FROM tomcat:${TOMCAT_VERSION}-jdk${JDK_VERSION}-temurin
+ARG TOMCAT_BASE_IMAGE=tomcat:${TOMCAT_VERSION}-jdk${JDK_VERSION}-temurin
+FROM ${TOMCAT_BASE_IMAGE}
 
 LABEL org.opencontainers.image.title="OneinStack Tomcat"
 LABEL org.opencontainers.image.source="https://github.com/FeeAI/oneinstack"
