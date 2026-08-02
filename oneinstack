@@ -79,9 +79,11 @@ Configure examples:
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
   ./oneinstack configure --extensions sqlsrv --accept-microsoft-eula
   ./oneinstack configure --pecl-extra uuid@uuid-1.3.0
-  ./oneinstack configure --enable cache,tomcat,phpmyadmin
+  ./oneinstack configure --redis 8.8 --memcached 1.6
+  ./oneinstack configure --node 24 --tomcat 11.0 --jdk 25
+  ./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+  ./oneinstack configure --apisix 3.17.0-debian
   ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
-  ./oneinstack configure --tomcat 9.0 --jdk 8
   ./oneinstack configure --disable memcached,tomcat
 
 Examples:
@@ -138,6 +140,15 @@ Database versions:
 Special version:
   Every configure version option accepts latest. It tracks the official
   upstream rolling tag while preserving required FPM/Alpine/slim variants.
+
+Examples:
+  ./oneinstack configure --web openresty --db mysql:9.7
+  ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
+  ./oneinstack configure --redis 8.8 --memcached 1.6
+  ./oneinstack configure --node 24 --tomcat 11.0 --jdk 25
+  ./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+  ./oneinstack configure --apisix 3.17.0-debian
+  ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 EOF
 }
 

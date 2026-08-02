@@ -42,6 +42,60 @@ cd oneinstack-docker
 
 `configure` 事务式更新 `.env`，全部组合校验通过后才会替换原配置：
 
+`./oneinstack configure -h` 的完整参数说明如下：
+
+<!-- oneinstack-configure-help:start -->
+```text
+Configure the OneinStack Docker deployment
+
+Usage:
+  ./oneinstack configure [options]
+
+Options:
+  --web ENGINE                 nginx, tengine, openresty, caddy, apache, npm or none
+  --db ENGINE[:VERSION]        mysql, mariadb, percona, postgresql, mongodb or none
+  --php VERSION                Primary PHP version: 8.2, 8.3, 8.4, 8.5 or latest
+  --extensions LIST            Comma-separated maintained PHP extensions or none
+  --pecl-extra LIST            MODULE@PACKAGE-VERSION entries or none
+  --accept-microsoft-eula      Accept the EULA required by sqlsrv
+  --enable LIST                Enable optional features
+  --disable LIST               Disable optional features
+  --redis VERSION              Enable Redis at an image version
+  --memcached VERSION          Enable Memcached at an image version
+  --node VERSION               Enable a Node.js major version or latest
+  --tomcat VERSION             Enable Tomcat 9.0, 10.1, 11.0 or latest
+  --jdk VERSION                Select Temurin LTS 8, 11, 17, 21, 25 or latest
+  --phpmyadmin VERSION         Enable phpMyAdmin at an image version
+  --adminer VERSION            Enable Adminer at an image version
+  --apisix VERSION             Enable Apache APISIX at an image version
+  --ftp-tls-mode MODE          required, optional or off
+  --ftp-tls-domain DOMAIN      Certificate domain used by the FTP service
+  -h, --help                   Show this help
+
+Optional features:
+  redis, memcached, cache, node, tomcat, phpmyadmin, adminer, apisix, ftp
+
+Database versions:
+  A VERSION suffix overrides the matching value in .env. Without a suffix,
+  the existing version is preserved. Maintained tracks with at least one year
+  remaining: MySQL 8.4/9.7; MariaDB 10.11/11.4/11.8; Percona 8.4;
+  PostgreSQL 15/16/17/18; MongoDB 7.0/8.0/8.3.
+
+Special version:
+  Every configure version option accepts latest. It tracks the official
+  upstream rolling tag while preserving required FPM/Alpine/slim variants.
+
+Examples:
+  ./oneinstack configure --web openresty --db mysql:9.7
+  ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
+  ./oneinstack configure --redis 8.8 --memcached 1.6
+  ./oneinstack configure --node 24 --tomcat 11.0 --jdk 25
+  ./oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone
+  ./oneinstack configure --apisix 3.17.0-debian
+  ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
+```
+<!-- oneinstack-configure-help:end -->
+
 ```bash
 ./oneinstack configure --web openresty --db mysql:9.7
 ./oneinstack configure --web npm

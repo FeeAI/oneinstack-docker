@@ -236,8 +236,24 @@ if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_DIR}/unsafe.env" \
   exit 1
 fi
 
+MAIN_HELP="$("${DOCKER_DIR}/oneinstack" --help)"
 CONFIGURE_HELP="$(ONEINSTACK_ENV_FILE="${TEST_DIR}/missing.env" \
   "${DOCKER_DIR}/oneinstack" configure -h)"
+readme_configure_help() {
+  awk '
+    /<!-- oneinstack-configure-help:start -->/ { printing = 1; next }
+    /<!-- oneinstack-configure-help:end -->/ { printing = 0 }
+    printing && /^```text$/ { next }
+    printing && /^```$/ { next }
+    printing { print }
+  ' "$1"
+}
+for readme in "${DOCKER_DIR}/README.md" "${DOCKER_DIR}/README.zh-CN.md"; do
+  if [[ "$(readme_configure_help "${readme}")" != "${CONFIGURE_HELP}" ]]; then
+    printf 'Documented configure help is out of sync: %s\n' "${readme}" >&2
+    exit 1
+  fi
+done
 grep -q '^Usage:$' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--db ENGINE[:VERSION]' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--redis VERSION' <<<"${CONFIGURE_HELP}"
@@ -248,6 +264,12 @@ grep -Fq -- '--adminer VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq 'Every configure version option accepts latest.' <<<"${CONFIGURE_HELP}"
 grep -Fq 'preserving required FPM/Alpine/slim variants.' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--ftp-tls-mode MODE' <<<"${CONFIGURE_HELP}"
+for help_output in "${MAIN_HELP}" "${CONFIGURE_HELP}"; do
+  grep -Fq './oneinstack configure --redis 8.8 --memcached 1.6' <<<"${help_output}"
+  grep -Fq './oneinstack configure --node 24 --tomcat 11.0 --jdk 25' <<<"${help_output}"
+  grep -Fq './oneinstack configure --phpmyadmin 5-apache --adminer 5-standalone' <<<"${help_output}"
+  grep -Fq './oneinstack configure --apisix 3.17.0-debian' <<<"${help_output}"
+done
 if grep -qi 'oracle' <<<"${CONFIGURE_HELP}"; then
   printf 'Removed Oracle JDK options remain in configure help.\n' >&2
   exit 1
