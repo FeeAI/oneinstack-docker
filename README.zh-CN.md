@@ -19,6 +19,21 @@
   Pure-FTPd；镜像版本选项也接受上游标签
 - 运维：虚拟主机、反向代理、TLS、备份恢复、健康检查、升级和清理
 
+## 基础镜像策略
+
+在不改变服务契约且官方仍覆盖受维护架构时，优先使用官方 Alpine 镜像。固定
+默认值中，Nginx 1.30.4、Tengine、OpenResty 1.31.1.1-2、Caddy 2.11.4、
+Apache 2.4.68、PHP-FPM、PostgreSQL、Redis、Memcached、Node.js、Adminer、
+Certbot 和 Pure-FTPd 均使用 Alpine。项目自行构建的 Tengine 与 Pure-FTPd
+使用 Alpine 3.24，该分支维护至 2028 年 6 月。
+
+官方没有同等受维护标签或切换后会改变服务契约时，不使用第三方 Alpine 镜像
+替代。MySQL、MariaDB、Percona Server、MongoDB、Tomcat、Nginx Proxy
+Manager 与 APISIX 保留官方非 Alpine 基础镜像。phpMyAdmin 的 Alpine 标签
+仅提供 FPM，无法替代当前独立 Apache 管理界面，因此保留 Apache 版本。
+选择 `sqlsrv` 时，PHP 会自动切换到 Bookworm，因为 Microsoft 没有为基于
+musl 的 Alpine 发布 ODBC 包。
+
 ## 快速开始
 
 ```bash
@@ -52,6 +67,7 @@ Usage:
   ./oneinstack configure [options]
 
 Options:
+  --resource-profile PROFILE  small, balanced, large or custom
   --web ENGINE                 nginx, tengine, openresty, caddy, apache, npm or none
   --db ENGINE[:VERSION]        mysql, mariadb, percona, postgresql, mongodb or none
   --php VERSION                Primary PHP version: 8.2, 8.3, 8.4, 8.5 or latest
@@ -83,9 +99,10 @@ Database versions:
 
 Special version:
   Every configure version option accepts latest. It tracks the official
-  upstream rolling tag while preserving required FPM/Alpine/slim variants.
+  upstream rolling tag while preserving required image variants.
 
 Examples:
+  ./oneinstack configure --resource-profile small
   ./oneinstack configure --web openresty --db mysql:9.7
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
   ./oneinstack configure --redis 8.8 --memcached 1.6
@@ -115,8 +132,9 @@ Examples:
 `configure` 暴露的每个版本参数都额外接受特殊值 `latest`，并解析为对应官方上游
 容器镜像的滚动标签，包括 PHP、数据库、Redis、Memcached、Node.js、Tomcat、
 phpMyAdmin、Adminer 和 APISIX。必要的镜像变体会保留，例如 PHP 使用
-`php:fpm-bookworm`、Redis 使用 `redis:alpine`、Node.js 使用
-`node:bookworm-slim`。Tomcat 与 JDK 是同一个上游镜像组合；
+`php:fpm-alpine`、Redis 使用 `redis:alpine`、Node.js 使用
+`node:alpine`。只有选择 `sqlsrv` 时 PHP 才使用 `php:fpm-bookworm`。
+Tomcat 与 JDK 是同一个上游镜像组合；
 任一使用 `latest` 时都会选择完整的 `tomcat:latest`，因此两者显示版本都变为
 `latest`。并行 PHP 仍必须指定 8.2-8.5，因为 Compose 服务名包含明确分支。
 
@@ -190,9 +208,30 @@ Redis、Memcached、phpMyAdmin、Adminer 和 APISIX 通过各自的专用选项�
 `STARTUP_HEALTH_TIMEOUT` 调整。
 
 每个服务均设置 CPU、内存、PID 上限和 Docker JSON 日志轮转。默认值按
-Web、PHP、数据库、运行时、辅助服务分组，可在 `.env` 中调整对应的
-`*_MEMORY_LIMIT`、`*_CPUS`、`*_PIDS_LIMIT`；单容器日志轮转由
-`CONTAINER_LOG_MAX_SIZE` 和 `CONTAINER_LOG_MAX_FILES` 控制。
+`RESOURCE_PROFILE=balanced` 运行。可用
+`./oneinstack configure --resource-profile small|balanced|large` 事务式切换整组
+资源参数；直接修改 `.env` 中的 `RESOURCE_PROFILE` 后，下一次管理器命令也会
+完成同步。预设档位会统一管理容器、PHP-FPM、数据库、缓存、Node.js 和 Tomcat
+的相关限制。如需逐项调整，应先切换到 `custom`；切换时会保留当前已物化的
+参数作为自定义起点。
+
+| 档位 | Web | PHP | 数据库 | 运行时 | 辅助服务 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `small` | 256 MB / 0.5 CPU | 512 MB / 1 CPU | 1 GB / 1 CPU | 512 MB / 1 CPU | 256 MB / 0.5 CPU |
+| `balanced` | 512 MB / 1 CPU | 1 GB / 2 CPU | 2 GB / 2 CPU | 1 GB / 2 CPU | 512 MB / 1 CPU |
+| `large` | 1 GB / 2 CPU | 2 GB / 4 CPU | 4 GB / 4 CPU | 2 GB / 4 CPU | 1 GB / 2 CPU |
+
+`CONTAINER_LOG_MAX_SIZE` 和 `CONTAINER_LOG_MAX_FILES` 不属于档位，用于控制
+单容器日志轮转。
+
+应用层限制与容器上限配套。PHP 默认容器为 1 GB，单请求内存上限为 256 MB，
+最多运行 3 个 FPM worker，并启用进程回收、请求超时、慢请求日志、realpath
+缓存与 OPcache。MySQL 家族默认容器为 2 GB，其中 1 GB 分配给 InnoDB buffer
+pool，同时限制连接数和表缓存。Redis 默认容器为 512 MB，设置
+`REDIS_MAXMEMORY=384mb`，为内存分配器、持久化和客户端保留 128 MB；默认
+`noeviction` 不会静默删除数据，达到上限后拒绝新的写入。调整容器内存时，应
+同时调整相关 `PHP_*`、`PHP_FPM_*`、`MYSQL_*` 或 `REDIS_*` 参数。这些是明确
+选择的容器资源档位，不读取宿主机总内存自动推算。
 
 数据库和 Redis 密码通过 Compose secrets 从 `.env` 配置的
 `*_PASSWORD_FILE` 路径挂载。旧 `.env` 中非占位的内联密码会在下一次配置

@@ -79,6 +79,28 @@ if command -v shellcheck >/dev/null 2>&1; then
     "${DOCKER_DIR}/ftp/manage-user"
 fi
 
+FPM_TEST_DIR="${TEST_DIR}/fpm"
+mkdir -p "${FPM_TEST_DIR}/bin"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"${FPM_TEST_DIR}/bin/php-fpm"
+printf '%s\n' '#!/bin/sh' 'exec "$@"' >"${FPM_TEST_DIR}/bin/docker-php-entrypoint"
+chmod 0755 "${FPM_TEST_DIR}/bin/php-fpm" "${FPM_TEST_DIR}/bin/docker-php-entrypoint"
+PATH="${FPM_TEST_DIR}/bin:${PATH}" \
+  PHP_FPM_CONFIG_TEMPLATE="${DOCKER_DIR}/php/fpm-pool.conf" \
+  PHP_FPM_CONFIG_TARGET="${FPM_TEST_DIR}/rendered.conf" \
+  PHP_FPM_MAX_CHILDREN=5 \
+  "${DOCKER_DIR}/php/secrets-entrypoint" true
+grep -q '^pm.max_children = 5$' "${FPM_TEST_DIR}/rendered.conf"
+grep -q '^pm.max_requests = 1000$' "${FPM_TEST_DIR}/rendered.conf"
+grep -q '^request_terminate_timeout = 300s$' "${FPM_TEST_DIR}/rendered.conf"
+if PATH="${FPM_TEST_DIR}/bin:${PATH}" \
+  PHP_FPM_CONFIG_TEMPLATE="${DOCKER_DIR}/php/fpm-pool.conf" \
+  PHP_FPM_CONFIG_TARGET="${FPM_TEST_DIR}/invalid.conf" \
+  PHP_FPM_MAX_CHILDREN=3 PHP_FPM_START_SERVERS=4 \
+  "${DOCKER_DIR}/php/secrets-entrypoint" true >/dev/null 2>&1; then
+  printf 'Inconsistent PHP-FPM worker settings were accepted.\n' >&2
+  exit 1
+fi
+
 if command -v ruby >/dev/null 2>&1; then
   ruby - "${DOCKER_DIR}" <<'RUBY'
 require "yaml"
@@ -111,6 +133,47 @@ end
   condition = services.dig(name, "depends_on", "php", "condition")
   abort "#{name} must wait for healthy PHP" unless condition == "service_healthy"
 end
+
+expected_web_images = {
+  "nginx" => ["${NGINX_VERSION:-1.30.4}", "oneinstack/nginx:${NGINX_VERSION:-1.30.4}"],
+  "openresty" => ["${OPENRESTY_VERSION:-1.31.1.1-2-alpine}", "oneinstack/openresty:${OPENRESTY_VERSION:-1.31.1.1-2-alpine}"],
+  "caddy" => ["${CADDY_VERSION:-2.11.4}", "oneinstack/caddy:${CADDY_VERSION:-2.11.4}"],
+  "apache" => ["${APACHE_VERSION:-2.4.68}", "oneinstack/apache:${APACHE_VERSION:-2.4.68}"]
+}
+expected_web_images.each do |name, (version, image)|
+  abort "unexpected #{name} build version" unless services.dig(name, "build", "args").values.include?(version)
+  abort "unexpected #{name} image" unless services.dig(name, "image") == image
+end
+
+php = services.fetch("php")
+abort "PHP must default to Alpine" unless php.dig("build", "args", "PHP_VARIANT") == "${PHP_VARIANT:-fpm-alpine}"
+expected_php_base = "${PHP_BASE_IMAGE:-php:${PHP_VERSION:-8.5}-${PHP_VARIANT:-fpm-alpine}}"
+abort "unexpected PHP base image" unless php.dig("build", "args", "PHP_BASE_IMAGE") == expected_php_base
+postgresql = services.fetch("postgresql")
+expected_postgres_base = "${POSTGRES_BASE_IMAGE:-postgres:${POSTGRES_VERSION:-18}-alpine}"
+abort "unexpected PostgreSQL base image" unless postgresql.dig("build", "args", "POSTGRES_BASE_IMAGE") == expected_postgres_base
+node = services.fetch("node")
+expected_node_base = "${NODE_BASE_IMAGE:-node:${NODE_VERSION:-24}-alpine}"
+abort "unexpected Node.js base image" unless node.dig("build", "args", "NODE_BASE_IMAGE") == expected_node_base
+
+expected_mysql_tuning = [
+  "--max-connections=${MYSQL_MAX_CONNECTIONS:-150}",
+  "--max-allowed-packet=${MYSQL_MAX_ALLOWED_PACKET:-256M}",
+  "--table-open-cache=${MYSQL_TABLE_OPEN_CACHE:-2048}",
+  "--thread-cache-size=${MYSQL_THREAD_CACHE_SIZE:-32}",
+  "--tmp-table-size=${MYSQL_TMP_TABLE_SIZE:-64M}",
+  "--max-heap-table-size=${MYSQL_MAX_HEAP_TABLE_SIZE:-64M}",
+  "--innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-1G}",
+  "--slow-query-log=ON",
+  "--long-query-time=${MYSQL_LONG_QUERY_TIME:-2}",
+  "--slow-query-log-file=/var/lib/mysql/slow.log"
+]
+%w[mysql mariadb percona].each do |name|
+  abort "unexpected #{name} tuning command" unless services.dig(name, "command") == expected_mysql_tuning
+end
+redis_command = services.dig("redis", "command", 2)
+abort "Redis maxmemory is not configured" unless redis_command.include?('--maxmemory "${REDIS_MAXMEMORY:-384mb}"')
+abort "Redis eviction policy is not configured" unless redis_command.include?('--maxmemory-policy "${REDIS_MAXMEMORY_POLICY:-noeviction}"')
 
 tomcat = services.fetch("tomcat")
 tomcat_build = tomcat.fetch("build")
@@ -198,6 +261,28 @@ fi
 grep -Fq 'ENTRYPOINT ["oneinstack-secrets-entrypoint"]' \
   "${DOCKER_DIR}/tomcat/Dockerfile"
 grep -Fq 'CMD ["catalina.sh", "run"]' "${DOCKER_DIR}/tomcat/Dockerfile"
+grep -Fq "FROM httpd:\${APACHE_VERSION}-alpine" "${DOCKER_DIR}/apache/Dockerfile"
+grep -Fq 'ARG OPENRESTY_VERSION=1.31.1.1-2-alpine' \
+  "${DOCKER_DIR}/openresty/Dockerfile"
+grep -Fq 'ARG PHP_VARIANT=fpm-alpine' "${DOCKER_DIR}/php/Dockerfile"
+grep -Fq "ARG POSTGRES_BASE_IMAGE=postgres:\${POSTGRES_VERSION}-alpine" \
+  "${DOCKER_DIR}/postgresql/Dockerfile"
+grep -Fq "ARG NODE_BASE_IMAGE=node:\${NODE_VERSION}-alpine" \
+  "${DOCKER_DIR}/node/Dockerfile"
+grep -Fq 'apk add --no-cache --virtual .oneinstack-php-build-deps' \
+  "${DOCKER_DIR}/php/Dockerfile"
+grep -Fq 'apk del --no-network .oneinstack-php-build-deps' \
+  "${DOCKER_DIR}/php/Dockerfile"
+grep -Fq 'COPY fpm-pool.conf /usr/local/etc/php-fpm.d/zz-oneinstack.conf.template' \
+  "${DOCKER_DIR}/php/Dockerfile"
+for web_config in nginx/nginx.conf tengine/nginx.conf openresty/nginx.conf; do
+  grep -Fq 'fastcgi_read_timeout 300s;' "${DOCKER_DIR}/${web_config}"
+  grep -Fq 'gzip_comp_level 5;' "${DOCKER_DIR}/${web_config}"
+  grep -Fq "rt=\$request_time urt=\$upstream_response_time" \
+    "${DOCKER_DIR}/${web_config}"
+done
+grep -Fq 'FROM alpine:3.24 AS builder' "${DOCKER_DIR}/tengine/Dockerfile"
+grep -Fq 'FROM alpine:3.24' "${DOCKER_DIR}/ftp/Dockerfile"
 [[ -f "${DOCKER_DIR}/apisix/Dockerfile" ]]
 grep -Fq "key: \${{APISIX_ADMIN_KEY}}" "${DOCKER_DIR}/apisix/config.yaml"
 grep -Fq 'http://apisix-etcd:2379' "${DOCKER_DIR}/apisix/config.yaml"
@@ -259,13 +344,14 @@ for readme in "${DOCKER_DIR}/README.md" "${DOCKER_DIR}/README.zh-CN.md"; do
 done
 grep -q '^Usage:$' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--db ENGINE[:VERSION]' <<<"${CONFIGURE_HELP}"
+grep -Fq -- '--resource-profile PROFILE' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--redis VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--apisix VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--memcached VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--phpmyadmin VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--adminer VERSION' <<<"${CONFIGURE_HELP}"
 grep -Fq 'Every configure version option accepts latest.' <<<"${CONFIGURE_HELP}"
-grep -Fq 'preserving required FPM/Alpine/slim variants.' <<<"${CONFIGURE_HELP}"
+grep -Fq 'preserving required image variants.' <<<"${CONFIGURE_HELP}"
 grep -Fq -- '--ftp-tls-mode MODE' <<<"${CONFIGURE_HELP}"
 for help_output in "${MAIN_HELP}" "${CONFIGURE_HELP}"; do
   grep -Fq './oneinstack configure --redis 8.8 --memcached 1.6' <<<"${help_output}"
@@ -301,6 +387,21 @@ grep -q '^MARIADB_VERSION=11.8$' "${TEST_ENV}"
 grep -q '^MONGODB_VERSION=8.3$' "${TEST_ENV}"
 grep -q '^JDK_VERSION=25$' "${TEST_ENV}"
 grep -q '^NODE_VERSION=24$' "${TEST_ENV}"
+grep -q '^NGINX_VERSION=1.30.4$' "${TEST_ENV}"
+grep -q '^OPENRESTY_VERSION=1.31.1.1-2-alpine$' "${TEST_ENV}"
+grep -q '^CADDY_VERSION=2.11.4$' "${TEST_ENV}"
+grep -q '^APACHE_VERSION=2.4.68$' "${TEST_ENV}"
+grep -q '^PHP_VARIANT=fpm-alpine$' "${TEST_ENV}"
+grep -q '^RESOURCE_PROFILE=balanced$' "${TEST_ENV}"
+grep -q '^POSTGRES_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^PHP_MEMORY_LIMIT=256M$' "${TEST_ENV}"
+grep -q '^PHP_FPM_MAX_CHILDREN=3$' "${TEST_ENV}"
+grep -q '^PHP_FPM_MAX_REQUESTS=1000$' "${TEST_ENV}"
+grep -q '^MYSQL_INNODB_BUFFER_POOL_SIZE=1G$' "${TEST_ENV}"
+grep -q '^MYSQL_MAX_CONNECTIONS=150$' "${TEST_ENV}"
+grep -q '^REDIS_MAXMEMORY=384mb$' "${TEST_ENV}"
+grep -q '^REDIS_MAXMEMORY_POLICY=noeviction$' "${TEST_ENV}"
+grep -q '^NODE_OPTIONS=--max-old-space-size=768$' "${TEST_ENV}"
 grep -q "^ONEINSTACK_DATA_DIR=${TEST_DATA_DIR}$" "${TEST_ENV}"
 grep -q "^DATABASE_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/database_password$" "${TEST_ENV}"
 grep -q "^MYSQL_ROOT_PASSWORD_FILE=${TEST_DATA_DIR}/secrets/mysql_root_password$" "${TEST_ENV}"
@@ -327,6 +428,52 @@ for secret_name in database_password mysql_root_password mongodb_root_password r
   [[ -s "${secret_file}" ]]
   [[ "$(test_mode "${secret_file}")" == "600" ]]
 done
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --resource-profile small >/dev/null
+grep -q '^RESOURCE_PROFILE=small$' "${TEST_ENV}"
+grep -q '^WEB_MEMORY_LIMIT=256m$' "${TEST_ENV}"
+grep -q '^PHP_CONTAINER_MEMORY_LIMIT=512m$' "${TEST_ENV}"
+grep -q '^PHP_MEMORY_LIMIT=128M$' "${TEST_ENV}"
+grep -q '^DATABASE_MEMORY_LIMIT=1g$' "${TEST_ENV}"
+grep -q '^MYSQL_INNODB_BUFFER_POOL_SIZE=512M$' "${TEST_ENV}"
+grep -q '^RUNTIME_MEMORY_LIMIT=512m$' "${TEST_ENV}"
+grep -q '^NODE_OPTIONS=--max-old-space-size=384$' "${TEST_ENV}"
+grep -q '^CATALINA_OPTS=-Xms128m -Xmx384m$' "${TEST_ENV}"
+grep -q '^REDIS_MAXMEMORY=192mb$' "${TEST_ENV}"
+grep -q '^MEMCACHED_MEMORY_MB=64$' "${TEST_ENV}"
+
+env_set "${TEST_ENV}" RESOURCE_PROFILE large
+PROFILE_CONFIG="$("${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" show-config)"
+grep -Fq 'Resources:        large' <<<"${PROFILE_CONFIG}"
+grep -q '^RESOURCE_PROFILE=large$' "${TEST_ENV}"
+grep -q '^PHP_CONTAINER_MEMORY_LIMIT=2g$' "${TEST_ENV}"
+grep -q '^PHP_FPM_MAX_CHILDREN=6$' "${TEST_ENV}"
+grep -q '^DATABASE_MEMORY_LIMIT=4g$' "${TEST_ENV}"
+grep -q '^MYSQL_INNODB_BUFFER_POOL_SIZE=2G$' "${TEST_ENV}"
+grep -q '^REDIS_MAXMEMORY=768mb$' "${TEST_ENV}"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --resource-profile custom >/dev/null
+env_set "${TEST_ENV}" PHP_MEMORY_LIMIT 384M
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" show-config >/dev/null
+grep -q '^RESOURCE_PROFILE=custom$' "${TEST_ENV}"
+grep -q '^PHP_MEMORY_LIMIT=384M$' "${TEST_ENV}"
+
+cp "${TEST_ENV}" "${TEST_ENV}.before-resource-error"
+if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --resource-profile oversized >/dev/null 2>&1; then
+  printf 'Invalid resource profile was accepted.\n' >&2
+  exit 1
+fi
+cmp "${TEST_ENV}" "${TEST_ENV}.before-resource-error"
+rm -f "${TEST_ENV}.before-resource-error"
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --resource-profile balanced >/dev/null
+grep -q '^RESOURCE_PROFILE=balanced$' "${TEST_ENV}"
+grep -q '^PHP_MEMORY_LIMIT=256M$' "${TEST_ENV}"
+
 if grep -Eq '^(DATABASE_PASSWORD|MYSQL_ROOT_PASSWORD|MONGODB_ROOT_PASSWORD|REDIS_PASSWORD|APISIX_ADMIN_KEY)=.+' \
   "${TEST_ENV}"; then
   printf 'Generated environment contains an inline service password.\n' >&2
@@ -394,6 +541,18 @@ for database_case in \
     configure --db "${database_spec}" >/dev/null
   grep -q "^${version_key}=${database_version}$" "${TEST_ENV}"
 done
+
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db postgresql:latest >/dev/null
+grep -q '^POSTGRES_BASE_IMAGE=postgres:alpine$' "${TEST_ENV}"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db postgresql:16.4-alpine >/dev/null
+grep -q '^POSTGRES_BASE_IMAGE=postgres:16.4-alpine$' "${TEST_ENV}"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db postgresql:18 >/dev/null
+grep -q '^POSTGRES_BASE_IMAGE=postgres:18-alpine$' "${TEST_ENV}"
+"${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
+  configure --db mysql:9.7 >/dev/null
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
 for invalid_database in \
@@ -490,10 +649,10 @@ grep -q '^COMPOSE_PROFILES=.*feature-apisix' "${TEST_ENV}"
   --apisix latest >/dev/null
 grep -q '^MYSQL_VERSION=latest$' "${TEST_ENV}"
 grep -q '^PHP_VERSION=latest$' "${TEST_ENV}"
-grep -q '^PHP_BASE_IMAGE=php:fpm-bookworm$' "${TEST_ENV}"
+grep -q '^PHP_BASE_IMAGE=php:fpm-alpine$' "${TEST_ENV}"
 grep -q '^REDIS_BASE_IMAGE=redis:alpine$' "${TEST_ENV}"
 grep -q '^MEMCACHED_BASE_IMAGE=memcached:alpine$' "${TEST_ENV}"
-grep -q '^NODE_BASE_IMAGE=node:bookworm-slim$' "${TEST_ENV}"
+grep -q '^NODE_BASE_IMAGE=node:alpine$' "${TEST_ENV}"
 grep -q '^TOMCAT_VERSION=latest$' "${TEST_ENV}"
 grep -q '^JDK_VERSION=latest$' "${TEST_ENV}"
 grep -q '^TOMCAT_BASE_IMAGE=tomcat:latest$' "${TEST_ENV}"
@@ -507,6 +666,7 @@ grep -q '^APISIX_VERSION=latest$' "${TEST_ENV}"
   --tomcat 11.0 --jdk 25 --phpmyadmin 5-apache \
   --adminer 5-standalone --apisix 3.17.0-debian >/dev/null
 grep -q '^PHP_BASE_IMAGE=$' "${TEST_ENV}"
+grep -q '^PHP_VARIANT=fpm-alpine$' "${TEST_ENV}"
 grep -q '^REDIS_BASE_IMAGE=$' "${TEST_ENV}"
 grep -q '^MEMCACHED_BASE_IMAGE=$' "${TEST_ENV}"
 grep -q '^NODE_BASE_IMAGE=$' "${TEST_ENV}"
@@ -576,6 +736,7 @@ cmp "${TEST_ENV}" "${TEST_ENV}.before"
 "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \
   configure --extensions sqlsrv --accept-microsoft-eula >/dev/null
 grep -q '^MICROSOFT_ODBC_ACCEPT_EULA=Y$' "${TEST_ENV}"
+grep -q '^PHP_VARIANT=fpm-bookworm$' "${TEST_ENV}"
 
 cp "${TEST_ENV}" "${TEST_ENV}.before"
 if "${DOCKER_DIR}/oneinstack" --env-file "${TEST_ENV}" \

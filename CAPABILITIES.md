@@ -21,7 +21,7 @@ are repeated inside an image.
 | TLS certificate lifecycle | Implemented with external acceptance | Caddy automatic HTTPS, Certbot HTTP-01, renewal, self-signed certificates, FTPS reload and host systemd timer |
 | Backup and restore | Implemented | Web, configuration, Tomcat, NPM, APISIX etcd snapshots, FTP and all database families; atomic checksummed sets, optional age encryption and rclone copies |
 | Upgrade, uninstall and daily management | Implemented | Build/update, health waits, safe down/purge and separately confirmed marker-guarded data purge |
-| Security and diagnostics | Implemented with external acceptance | Shared internal backend, isolated runtime egress, file secrets, resource/PID ceilings, log rotation, TLS-first FTP and health checks |
+| Security and diagnostics | Implemented with external acceptance | Shared internal backend, isolated runtime egress, file secrets, transactional small/balanced/large/custom resource profiles, paired container/application memory limits, slow logs, resource/PID ceilings, log rotation, TLS-first FTP and health checks |
 
 ## Deliberate gaps
 

@@ -1,4 +1,4 @@
-ARG NGINX_VERSION=stable
+ARG NGINX_VERSION=1.30.4
 FROM nginx:${NGINX_VERSION}-alpine
 
 LABEL org.opencontainers.image.title="OneinStack Nginx"

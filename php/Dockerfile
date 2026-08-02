@@ -1,5 +1,5 @@
 ARG PHP_VERSION=8.5
-ARG PHP_VARIANT=fpm-bookworm
+ARG PHP_VARIANT=fpm-alpine
 ARG PHP_BASE_IMAGE=php:${PHP_VERSION}-${PHP_VARIANT}
 FROM ${PHP_BASE_IMAGE}
 
@@ -29,48 +29,78 @@ LABEL org.opencontainers.image.source="https://github.com/FeeAI/oneinstack"
 ENV TZ=Asia/Singapore
 
 RUN set -eux; \
-    apt-get update; \
-    php_build_packages=' \
-      default-mysql-client \
-      git \
-      libbrotli-dev \
-      libcurl4-openssl-dev \
-      libfcgi-bin \
-      libfreetype6-dev \
-      libicu-dev \
-      libjpeg62-turbo-dev \
-      libldap2-dev \
-      libmagickwand-dev \
-      libmemcached-dev \
-      libpng-dev \
-      libpq-dev \
-      libsasl2-dev \
-      libssl-dev \
-      libzip-dev \
-      unzip'; \
-    case ",${PHP_EXTENSIONS}," in \
-      *,sqlsrv,*) php_build_packages="${php_build_packages} curl gnupg unixodbc-dev" ;; \
-    esac; \
-    apt-get install -y --no-install-recommends ${php_build_packages}; \
-    case ",${PHP_EXTENSIONS}," in \
-      *,sqlsrv,*) \
-        [ "${MICROSOFT_ODBC_ACCEPT_EULA}" = 'Y' ] || { \
-          echo 'sqlsrv requires MICROSOFT_ODBC_ACCEPT_EULA=Y' >&2; \
+    if command -v apk >/dev/null 2>&1; then \
+      case ",${PHP_EXTENSIONS}," in \
+        *,sqlsrv,*) \
+          echo 'sqlsrv requires the official PHP Bookworm variant' >&2; \
           exit 1; \
-        }; \
-        curl -fsSLo /tmp/microsoft.asc https://packages.microsoft.com/keys/microsoft.asc; \
-        gpg --batch --yes --dearmor \
-          --output /usr/share/keyrings/microsoft-prod.gpg /tmp/microsoft.asc; \
-        printf '%s\n' \
-          'deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main' \
-          >/etc/apt/sources.list.d/microsoft-prod.list; \
-        apt-get update; \
-        ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18; \
-        rm -f /tmp/microsoft.asc \
-          /etc/apt/sources.list.d/microsoft-prod.list \
-          /usr/share/keyrings/microsoft-prod.gpg; \
-        ;; \
-    esac; \
+          ;; \
+      esac; \
+      apk add --no-cache \
+        fcgi \
+        git \
+        mariadb-client \
+        shadow \
+        unzip; \
+      apk add --no-cache --virtual .oneinstack-php-build-deps \
+        ${PHPIZE_DEPS} \
+        brotli-dev \
+        curl-dev \
+        freetype-dev \
+        icu-dev \
+        imagemagick-dev \
+        libjpeg-turbo-dev \
+        libmemcached-dev \
+        libpng-dev \
+        libzip-dev \
+        linux-headers \
+        openldap-dev \
+        openssl-dev \
+        postgresql-dev; \
+    else \
+      apt-get update; \
+      php_build_packages=' \
+        default-mysql-client \
+        git \
+        libbrotli-dev \
+        libcurl4-openssl-dev \
+        libfcgi-bin \
+        libfreetype6-dev \
+        libicu-dev \
+        libjpeg62-turbo-dev \
+        libldap2-dev \
+        libmagickwand-dev \
+        libmemcached-dev \
+        libpng-dev \
+        libpq-dev \
+        libsasl2-dev \
+        libssl-dev \
+        libzip-dev \
+        unzip'; \
+      case ",${PHP_EXTENSIONS}," in \
+        *,sqlsrv,*) php_build_packages="${php_build_packages} curl gnupg unixodbc-dev" ;; \
+      esac; \
+      apt-get install -y --no-install-recommends ${php_build_packages}; \
+      case ",${PHP_EXTENSIONS}," in \
+        *,sqlsrv,*) \
+          [ "${MICROSOFT_ODBC_ACCEPT_EULA}" = 'Y' ] || { \
+            echo 'sqlsrv requires MICROSOFT_ODBC_ACCEPT_EULA=Y' >&2; \
+            exit 1; \
+          }; \
+          curl -fsSLo /tmp/microsoft.asc https://packages.microsoft.com/keys/microsoft.asc; \
+          gpg --batch --yes --dearmor \
+            --output /usr/share/keyrings/microsoft-prod.gpg /tmp/microsoft.asc; \
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main' \
+            >/etc/apt/sources.list.d/microsoft-prod.list; \
+          apt-get update; \
+          ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18; \
+          rm -f /tmp/microsoft.asc \
+            /etc/apt/sources.list.d/microsoft-prod.list \
+            /usr/share/keyrings/microsoft-prod.gpg; \
+          ;; \
+      esac; \
+    fi; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" \
       bcmath \
@@ -109,9 +139,21 @@ RUN set -eux; \
       /usr/local/bin/oneinstack-install-php-extensions; \
     if [ "$(id -g www-data)" != "${APP_GID}" ]; then groupmod -o -g "${APP_GID}" www-data; fi; \
     if [ "$(id -u www-data)" != "${APP_UID}" ]; then usermod -o -u "${APP_UID}" -g "${APP_GID}" www-data; fi; \
+    if command -v apk >/dev/null 2>&1; then \
+      extension_dir="$(php-config --extension-dir)"; \
+      run_deps="$( \
+        scanelf --needed --nobanner --format '%n#p' --recursive "${extension_dir}" \
+          | tr ',' '\n' \
+          | sort -u \
+          | awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+      )"; \
+      apk add --no-cache --virtual .oneinstack-php-rundeps ${run_deps}; \
+      apk del --no-network .oneinstack-php-build-deps; \
+    fi; \
     rm -rf /tmp/pear /var/lib/apt/lists/*
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+COPY fpm-pool.conf /usr/local/etc/php-fpm.d/zz-oneinstack.conf.template
 COPY fpm-pool.conf /usr/local/etc/php-fpm.d/zz-oneinstack.conf
 COPY fpm-healthcheck /usr/local/bin/fpm-healthcheck
 COPY secrets-entrypoint /usr/local/bin/oneinstack-secrets-entrypoint

@@ -49,8 +49,37 @@ x-mysql-environment: &mysql-environment
   MYSQL_USER: ${DATABASE_USER:-oneinstack}
   MYSQL_PASSWORD_FILE: /run/secrets/database_password
 
+x-mysql-tuning: &mysql-tuning
+  - --max-connections=${MYSQL_MAX_CONNECTIONS:-150}
+  - --max-allowed-packet=${MYSQL_MAX_ALLOWED_PACKET:-256M}
+  - --table-open-cache=${MYSQL_TABLE_OPEN_CACHE:-2048}
+  - --thread-cache-size=${MYSQL_THREAD_CACHE_SIZE:-32}
+  - --tmp-table-size=${MYSQL_TMP_TABLE_SIZE:-64M}
+  - --max-heap-table-size=${MYSQL_MAX_HEAP_TABLE_SIZE:-64M}
+  - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-1G}
+  - --slow-query-log=ON
+  - --long-query-time=${MYSQL_LONG_QUERY_TIME:-2}
+  - --slow-query-log-file=/var/lib/mysql/slow.log
+
 x-php-environment: &php-environment
   TZ: ${TZ:-Asia/Singapore}
+  PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT:-256M}
+  PHP_MAX_EXECUTION_TIME: ${PHP_MAX_EXECUTION_TIME:-300}
+  PHP_MAX_INPUT_TIME: ${PHP_MAX_INPUT_TIME:-300}
+  PHP_POST_MAX_SIZE: ${PHP_POST_MAX_SIZE:-256M}
+  PHP_UPLOAD_MAX_FILESIZE: ${PHP_UPLOAD_MAX_FILESIZE:-256M}
+  PHP_REALPATH_CACHE_SIZE: ${PHP_REALPATH_CACHE_SIZE:-4M}
+  PHP_REALPATH_CACHE_TTL: ${PHP_REALPATH_CACHE_TTL:-120}
+  PHP_OPCACHE_MEMORY_CONSUMPTION: ${PHP_OPCACHE_MEMORY_CONSUMPTION:-192}
+  PHP_OPCACHE_MAX_ACCELERATED_FILES: ${PHP_OPCACHE_MAX_ACCELERATED_FILES:-100000}
+  PHP_OPCACHE_REVALIDATE_FREQ: ${PHP_OPCACHE_REVALIDATE_FREQ:-2}
+  PHP_FPM_MAX_CHILDREN: ${PHP_FPM_MAX_CHILDREN:-3}
+  PHP_FPM_START_SERVERS: ${PHP_FPM_START_SERVERS:-2}
+  PHP_FPM_MIN_SPARE_SERVERS: ${PHP_FPM_MIN_SPARE_SERVERS:-1}
+  PHP_FPM_MAX_SPARE_SERVERS: ${PHP_FPM_MAX_SPARE_SERVERS:-2}
+  PHP_FPM_MAX_REQUESTS: ${PHP_FPM_MAX_REQUESTS:-1000}
+  PHP_FPM_REQUEST_TERMINATE_TIMEOUT: ${PHP_FPM_REQUEST_TERMINATE_TIMEOUT:-300s}
+  PHP_FPM_REQUEST_SLOWLOG_TIMEOUT: ${PHP_FPM_REQUEST_SLOWLOG_TIMEOUT:-10s}
   PHP_EXTENSIONS: ${PHP_EXTENSIONS:-imagick,redis,memcached,mongodb,pgsql}
   PHP_EXTRA_PECL_PACKAGES: ${PHP_EXTRA_PECL_PACKAGES:-}
   DATABASE_ENGINE: ${DATABASE_ENGINE:-mysql}
@@ -71,7 +100,7 @@ x-php-environment: &php-environment
   MEMCACHED_PORT: 11211
 
 x-php-build-args: &php-build-args
-  PHP_VARIANT: ${PHP_VARIANT:-fpm-bookworm}
+  PHP_VARIANT: ${PHP_VARIANT:-fpm-alpine}
   PHP_EXTENSIONS: ${PHP_EXTENSIONS:-imagick,redis,memcached,mongodb,pgsql}
   PHP_EXTRA_PECL_PACKAGES: ${PHP_EXTRA_PECL_PACKAGES:-}
   PHPREDIS_VERSION: ${PHPREDIS_VERSION:-6.3.0}
@@ -99,8 +128,8 @@ services:
     build:
       context: ./nginx
       args:
-        NGINX_VERSION: ${NGINX_VERSION:-stable}
-    image: oneinstack/nginx:${NGINX_VERSION:-stable}
+        NGINX_VERSION: ${NGINX_VERSION:-1.30.4}
+    image: oneinstack/nginx:${NGINX_VERSION:-1.30.4}
     restart: unless-stopped
     environment: *web-environment
     depends_on:
@@ -164,8 +193,8 @@ services:
     build:
       context: ./openresty
       args:
-        OPENRESTY_VERSION: ${OPENRESTY_VERSION:-1.27.1.2-0-alpine}
-    image: oneinstack/openresty:${OPENRESTY_VERSION:-1.27.1.2-0-alpine}
+        OPENRESTY_VERSION: ${OPENRESTY_VERSION:-1.31.1.1-2-alpine}
+    image: oneinstack/openresty:${OPENRESTY_VERSION:-1.31.1.1-2-alpine}
     restart: unless-stopped
     environment: *web-environment
     depends_on:
@@ -195,8 +224,8 @@ services:
     build:
       context: ./caddy
       args:
-        CADDY_VERSION: ${CADDY_VERSION:-2}
-    image: oneinstack/caddy:${CADDY_VERSION:-2}
+        CADDY_VERSION: ${CADDY_VERSION:-2.11.4}
+    image: oneinstack/caddy:${CADDY_VERSION:-2.11.4}
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Singapore}
@@ -230,8 +259,8 @@ services:
     build:
       context: ./apache
       args:
-        APACHE_VERSION: ${APACHE_VERSION:-2.4}
-    image: oneinstack/apache:${APACHE_VERSION:-2.4}
+        APACHE_VERSION: ${APACHE_VERSION:-2.4.68}
+    image: oneinstack/apache:${APACHE_VERSION:-2.4.68}
     restart: unless-stopped
     environment: *web-environment
     depends_on:
@@ -347,7 +376,7 @@ services:
       args:
         <<: *php-build-args
         PHP_VERSION: ${PHP_VERSION:-8.5}
-        PHP_BASE_IMAGE: ${PHP_BASE_IMAGE:-php:${PHP_VERSION:-8.5}-${PHP_VARIANT:-fpm-bookworm}}
+        PHP_BASE_IMAGE: ${PHP_BASE_IMAGE:-php:${PHP_VERSION:-8.5}-${PHP_VARIANT:-fpm-alpine}}
     image: oneinstack/php:${PHP_VERSION:-8.5}
     restart: unless-stopped
     environment: *php-environment
@@ -375,7 +404,7 @@ services:
       args:
         <<: *php-build-args
         PHP_VERSION: "8.2"
-        PHP_BASE_IMAGE: php:8.2-fpm-bookworm
+        PHP_BASE_IMAGE: php:8.2-${PHP_VARIANT:-fpm-alpine}
     image: oneinstack/php:8.2
     restart: unless-stopped
     environment: *php-environment
@@ -403,7 +432,7 @@ services:
       args:
         <<: *php-build-args
         PHP_VERSION: "8.3"
-        PHP_BASE_IMAGE: php:8.3-fpm-bookworm
+        PHP_BASE_IMAGE: php:8.3-${PHP_VARIANT:-fpm-alpine}
     image: oneinstack/php:8.3
     restart: unless-stopped
     environment: *php-environment
@@ -431,7 +460,7 @@ services:
       args:
         <<: *php-build-args
         PHP_VERSION: "8.4"
-        PHP_BASE_IMAGE: php:8.4-fpm-bookworm
+        PHP_BASE_IMAGE: php:8.4-${PHP_VARIANT:-fpm-alpine}
     image: oneinstack/php:8.4
     restart: unless-stopped
     environment: *php-environment
@@ -459,7 +488,7 @@ services:
       args:
         <<: *php-build-args
         PHP_VERSION: "8.5"
-        PHP_BASE_IMAGE: php:8.5-fpm-bookworm
+        PHP_BASE_IMAGE: php:8.5-${PHP_VARIANT:-fpm-alpine}
     image: oneinstack/php:8.5
     restart: unless-stopped
     environment: *php-environment
@@ -489,6 +518,7 @@ services:
     image: oneinstack/mysql:${MYSQL_VERSION:-9.7}
     restart: unless-stopped
     environment: *mysql-environment
+    command: *mysql-tuning
     secrets:
       - database_password
       - mysql_root_password
@@ -519,6 +549,7 @@ services:
       MARIADB_DATABASE: ${DATABASE_NAME:-oneinstack}
       MARIADB_USER: ${DATABASE_USER:-oneinstack}
       MARIADB_PASSWORD_FILE: /run/secrets/database_password
+    command: *mysql-tuning
     secrets:
       - database_password
       - mysql_root_password
@@ -546,6 +577,7 @@ services:
     environment:
       <<: *mysql-environment
       PERCONA_TELEMETRY_DISABLE: "1"
+    command: *mysql-tuning
     secrets:
       - database_password
       - mysql_root_password
@@ -568,6 +600,7 @@ services:
       context: ./postgresql
       args:
         POSTGRES_VERSION: ${POSTGRES_VERSION:-18}
+        POSTGRES_BASE_IMAGE: ${POSTGRES_BASE_IMAGE:-postgres:${POSTGRES_VERSION:-18}-alpine}
     image: oneinstack/postgresql:${POSTGRES_VERSION:-18}
     restart: unless-stopped
     environment:
@@ -639,7 +672,14 @@ services:
     command:
       - /bin/sh
       - -ec
-      - exec redis-server /usr/local/etc/redis/redis.conf --requirepass "$$(cat "$$REDIS_PASSWORD_FILE")"
+      - >-
+        exec redis-server /usr/local/etc/redis/redis.conf
+        --requirepass "$$(cat "$$REDIS_PASSWORD_FILE")"
+        --maxmemory "${REDIS_MAXMEMORY:-384mb}"
+        --maxmemory-policy "${REDIS_MAXMEMORY_POLICY:-noeviction}"
+        --maxclients "${REDIS_MAX_CLIENTS:-1000}"
+        --slowlog-log-slower-than "${REDIS_SLOWLOG_LOG_SLOWER_THAN:-10000}"
+        --slowlog-max-len "${REDIS_SLOWLOG_MAX_LEN:-128}"
     volumes:
       - "${ONEINSTACK_DATA_DIR:?ONEINSTACK_DATA_DIR must be set}/redis:/data"
     healthcheck:
@@ -683,7 +723,7 @@ services:
       context: ./node
       args:
         NODE_VERSION: ${NODE_VERSION:-24}
-        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:${NODE_VERSION:-24}-bookworm-slim}
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:${NODE_VERSION:-24}-alpine}
         APP_UID: ${APP_UID:-1000}
         APP_GID: ${APP_GID:-1000}
     image: oneinstack/node:${NODE_VERSION:-24}
@@ -691,6 +731,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Singapore}
       NODE_ENV: ${NODE_ENV:-production}
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=768}
       PORT: ${NODE_PORT:-3000}
       DATABASE_HOST: ${DATABASE_HOST:-mysql}
       DATABASE_PORT: ${DATABASE_PORT:-3306}

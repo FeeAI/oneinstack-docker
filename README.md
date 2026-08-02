@@ -20,6 +20,23 @@ the current runtime acceptance status.
   Pure-FTPd; image-version options also accept upstream tags
 - Operations: sites, proxies, TLS, backup/restore, health checks and upgrades
 
+## Image base policy
+
+Official Alpine images are preferred when they preserve the service contract
+and maintained architecture coverage. The pinned defaults use Alpine for
+Nginx 1.30.4, Tengine, OpenResty 1.31.1.1-2, Caddy 2.11.4, Apache 2.4.68,
+PHP-FPM, PostgreSQL, Redis, Memcached, Node.js, Adminer, Certbot and Pure-FTPd.
+The locally built Tengine and Pure-FTPd images use Alpine 3.24, supported until
+June 2028.
+
+An Alpine base is not substituted when the official image does not publish an
+equivalent maintained tag or the service contract would change. MySQL,
+MariaDB, Percona Server, MongoDB, Tomcat, Nginx Proxy Manager and APISIX retain
+their official non-Alpine bases. phpMyAdmin retains its self-contained Apache
+image because its Alpine tag is FPM-only. PHP switches to Bookworm
+automatically when `sqlsrv` is selected because Microsoft's ODBC package is
+not published for musl-based Alpine.
+
 ## Quick start
 
 ```bash
@@ -53,6 +70,7 @@ Usage:
   ./oneinstack configure [options]
 
 Options:
+  --resource-profile PROFILE  small, balanced, large or custom
   --web ENGINE                 nginx, tengine, openresty, caddy, apache, npm or none
   --db ENGINE[:VERSION]        mysql, mariadb, percona, postgresql, mongodb or none
   --php VERSION                Primary PHP version: 8.2, 8.3, 8.4, 8.5 or latest
@@ -84,9 +102,10 @@ Database versions:
 
 Special version:
   Every configure version option accepts latest. It tracks the official
-  upstream rolling tag while preserving required FPM/Alpine/slim variants.
+  upstream rolling tag while preserving required image variants.
 
 Examples:
+  ./oneinstack configure --resource-profile small
   ./oneinstack configure --web openresty --db mysql:9.7
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
   ./oneinstack configure --redis 8.8 --memcached 1.6
@@ -121,8 +140,9 @@ Every version argument exposed by `configure` also accepts the special value
 `latest`. It resolves to the corresponding official upstream rolling tag,
 including PHP, databases, Redis, Memcached, Node.js, Tomcat, phpMyAdmin,
 Adminer and APISIX. Required image flavors are preserved: for example PHP uses
-`php:fpm-bookworm`, Redis uses `redis:alpine`, and Node.js uses
-`node:bookworm-slim`. For Tomcat, either `--tomcat latest` or
+`php:fpm-alpine`, Redis uses `redis:alpine`, and Node.js uses
+`node:alpine`. PHP uses `php:fpm-bookworm` only when `sqlsrv` is selected. For
+Tomcat, either `--tomcat latest` or
 `--jdk latest` selects the complete `tomcat:latest` image, so both displayed
 versions become `latest`. Parallel PHP runtimes still require an explicit
 8.2-8.5 branch because their Compose service names are versioned.
@@ -199,10 +219,33 @@ returning. Web services also use Compose's healthy-PHP dependency. The wait
 defaults to 180 seconds and is configurable with `STARTUP_HEALTH_TIMEOUT`.
 
 Every service has a CPU, memory and PID ceiling plus Docker JSON log rotation.
-The defaults are grouped by web, PHP, database, runtime and auxiliary service;
-adjust the corresponding `*_MEMORY_LIMIT`, `*_CPUS` and `*_PIDS_LIMIT`
-variables in `.env`. `CONTAINER_LOG_MAX_SIZE` and
-`CONTAINER_LOG_MAX_FILES` control per-container log rotation.
+`RESOURCE_PROFILE=balanced` is the default. Change the complete resource set
+transactionally with `./oneinstack configure --resource-profile small|balanced|large`.
+The same synchronization occurs on the next manager command if
+`RESOURCE_PROFILE` is edited directly. A preset owns its related container,
+PHP-FPM, database, cache, Node.js and Tomcat limits, so select `custom` before
+editing those individual values. Switching to `custom` preserves the currently
+materialized values as a starting point.
+
+| Profile | Web | PHP | Database | Runtime | Auxiliary |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `small` | 256 MB / 0.5 CPU | 512 MB / 1 CPU | 1 GB / 1 CPU | 512 MB / 1 CPU | 256 MB / 0.5 CPU |
+| `balanced` | 512 MB / 1 CPU | 1 GB / 2 CPU | 2 GB / 2 CPU | 1 GB / 2 CPU | 512 MB / 1 CPU |
+| `large` | 1 GB / 2 CPU | 2 GB / 4 CPU | 4 GB / 4 CPU | 2 GB / 4 CPU | 1 GB / 2 CPU |
+
+`CONTAINER_LOG_MAX_SIZE` and `CONTAINER_LOG_MAX_FILES` remain independent and
+control per-container log rotation.
+
+Application limits are paired with those container ceilings. The 1 GB PHP
+default uses a 256 MB per-request limit and at most three FPM workers, with
+worker recycling, request timeouts, a slow log, realpath caching and OPcache.
+The 2 GB MySQL-family default reserves 1 GB for the InnoDB buffer pool and
+uses bounded connection and table caches. Redis reserves 128 MB of its 512 MB
+container ceiling for allocator, persistence and client overhead by setting
+`REDIS_MAXMEMORY=384mb`; the default `noeviction` policy preserves stored keys
+and rejects writes when full. Change the related `PHP_*`, `PHP_FPM_*`,
+`MYSQL_*` or `REDIS_*` values together with the container memory ceiling.
+These are explicit container profiles, not host-memory autodetection.
 
 Database and Redis passwords are mounted from the configured
 `*_PASSWORD_FILE` paths through Compose secrets. Existing non-placeholder

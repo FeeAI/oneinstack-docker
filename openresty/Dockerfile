@@ -1,4 +1,4 @@
-ARG OPENRESTY_VERSION=1.27.1.2-0-alpine
+ARG OPENRESTY_VERSION=1.31.1.1-2-alpine
 FROM openresty/openresty:${OPENRESTY_VERSION}
 
 LABEL org.opencontainers.image.title="OneinStack OpenResty"

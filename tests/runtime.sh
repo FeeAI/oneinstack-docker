@@ -61,6 +61,7 @@ command -v curl >/dev/null 2>&1 ||
 
 "${MANAGER[@]}" init --data-dir "${DATA_DIR}"
 env_set "${ENV_FILE}" COMPOSE_PROJECT_NAME "oneinstack-runtime-${$}"
+env_set "${ENV_FILE}" RESOURCE_PROFILE custom
 env_set "${ENV_FILE}" HTTP_BIND 127.0.0.1
 env_set "${ENV_FILE}" HTTP_PORT "${HTTP_PORT}"
 env_set "${ENV_FILE}" HTTPS_BIND 127.0.0.1
@@ -113,7 +114,7 @@ HTTP_RESPONSE="$(
 
 docker image inspect \
   oneinstack/php:8.5 \
-  oneinstack/nginx:stable \
+  oneinstack/nginx:1.30.4 \
   oneinstack/mysql:9.7 \
   --format '{{.Id}} {{json .RepoTags}} {{json .RepoDigests}}'
 

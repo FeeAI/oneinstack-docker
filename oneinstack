@@ -74,6 +74,7 @@ Commands:
   compose ARGS...       Pass arguments directly to Docker Compose
 
 Configure examples:
+  ./oneinstack configure --resource-profile balanced
   ./oneinstack configure --web openresty --db mysql:9.7
   ./oneinstack configure --db mariadb
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
@@ -108,6 +109,7 @@ Usage:
   ./oneinstack configure [options]
 
 Options:
+  --resource-profile PROFILE  small, balanced, large or custom
   --web ENGINE                 nginx, tengine, openresty, caddy, apache, npm or none
   --db ENGINE[:VERSION]        mysql, mariadb, percona, postgresql, mongodb or none
   --php VERSION                Primary PHP version: 8.2, 8.3, 8.4, 8.5 or latest
@@ -139,9 +141,10 @@ Database versions:
 
 Special version:
   Every configure version option accepts latest. It tracks the official
-  upstream rolling tag while preserving required FPM/Alpine/slim variants.
+  upstream rolling tag while preserving required image variants.
 
 Examples:
+  ./oneinstack configure --resource-profile small
   ./oneinstack configure --web openresty --db mysql:9.7
   ./oneinstack configure --php 8.5 --extensions imagick,redis,mongodb,swoole
   ./oneinstack configure --redis 8.8 --memcached 1.6
@@ -150,6 +153,256 @@ Examples:
   ./oneinstack configure --apisix 3.17.0-debian
   ./oneinstack configure --enable ftp --ftp-tls-domain ftp.example.com
 EOF
+}
+
+validate_resource_profile() {
+  case "$1" in
+    small | balanced | large | custom) ;;
+    *) fail "Resource profile must be small, balanced, large or custom." ;;
+  esac
+}
+
+apply_resource_settings() {
+  local target_env_file="$1"
+  local directory
+  local key
+  local settings_file
+  local temporary_env_file
+  local value
+
+  directory="$(dirname -- "${target_env_file}")"
+  settings_file="$(mktemp "${directory}/.oneinstack.resource-settings.XXXXXX")"
+  temporary_env_file="$(mktemp "${directory}/.oneinstack.resources.XXXXXX")"
+  while IFS='=' read -r key value; do
+    [[ -n "${key}" ]] || continue
+    [[ "${key}" =~ ^[A-Z][A-Z0-9_]*$ ]] || {
+      rm -f "${settings_file}" "${temporary_env_file}"
+      fail "Invalid resource setting: ${key}"
+    }
+    printf '%s=%s\n' "${key}" "${value}" >>"${settings_file}"
+  done
+
+  if ! awk '
+    NR == FNR {
+      key = $0
+      sub(/=.*/, "", key)
+      values[key] = substr($0, length(key) + 2)
+      order[++count] = key
+      next
+    }
+    {
+      key = $0
+      sub(/=.*/, "", key)
+      if (key in values) {
+        if (!written[key]) print key "=" values[key]
+        written[key] = 1
+        next
+      }
+      print
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        key = order[i]
+        if (!written[key]) print key "=" values[key]
+      }
+    }
+  ' "${settings_file}" "${target_env_file}" >"${temporary_env_file}"; then
+    rm -f "${settings_file}" "${temporary_env_file}"
+    return 1
+  fi
+  chmod 0600 "${temporary_env_file}"
+  if cmp -s "${target_env_file}" "${temporary_env_file}"; then
+    rm -f "${temporary_env_file}"
+  else
+    mv "${temporary_env_file}" "${target_env_file}"
+  fi
+  rm -f "${settings_file}"
+}
+
+apply_resource_profile() {
+  local profile="$1"
+  local target_env_file="${2:-${ENV_FILE}}"
+
+  validate_resource_profile "${profile}"
+
+  case "${profile}" in
+  small)
+    apply_resource_settings "${target_env_file}" <<'SETTINGS'
+RESOURCE_PROFILE=small
+WEB_MEMORY_LIMIT=256m
+WEB_CPUS=0.5
+WEB_PIDS_LIMIT=128
+PHP_CONTAINER_MEMORY_LIMIT=512m
+PHP_CPUS=1.0
+PHP_PIDS_LIMIT=256
+PHP_MEMORY_LIMIT=128M
+PHP_MAX_EXECUTION_TIME=300
+PHP_MAX_INPUT_TIME=300
+PHP_POST_MAX_SIZE=128M
+PHP_UPLOAD_MAX_FILESIZE=128M
+PHP_REALPATH_CACHE_SIZE=4M
+PHP_REALPATH_CACHE_TTL=120
+PHP_OPCACHE_MEMORY_CONSUMPTION=96
+PHP_OPCACHE_MAX_ACCELERATED_FILES=100000
+PHP_OPCACHE_REVALIDATE_FREQ=2
+PHP_FPM_MAX_CHILDREN=3
+PHP_FPM_START_SERVERS=1
+PHP_FPM_MIN_SPARE_SERVERS=1
+PHP_FPM_MAX_SPARE_SERVERS=2
+PHP_FPM_MAX_REQUESTS=1000
+PHP_FPM_REQUEST_TERMINATE_TIMEOUT=300s
+PHP_FPM_REQUEST_SLOWLOG_TIMEOUT=10s
+DATABASE_MEMORY_LIMIT=1g
+DATABASE_CPUS=1.0
+DATABASE_PIDS_LIMIT=256
+MYSQL_MAX_CONNECTIONS=100
+MYSQL_MAX_ALLOWED_PACKET=128M
+MYSQL_TABLE_OPEN_CACHE=1024
+MYSQL_THREAD_CACHE_SIZE=16
+MYSQL_TMP_TABLE_SIZE=32M
+MYSQL_MAX_HEAP_TABLE_SIZE=32M
+MYSQL_INNODB_BUFFER_POOL_SIZE=512M
+MYSQL_LONG_QUERY_TIME=2
+RUNTIME_MEMORY_LIMIT=512m
+RUNTIME_CPUS=1.0
+RUNTIME_PIDS_LIMIT=256
+NODE_OPTIONS=--max-old-space-size=384
+CATALINA_OPTS=-Xms128m -Xmx384m
+AUXILIARY_MEMORY_LIMIT=256m
+AUXILIARY_CPUS=0.5
+AUXILIARY_PIDS_LIMIT=128
+REDIS_MAXMEMORY=192mb
+REDIS_MAXMEMORY_POLICY=noeviction
+REDIS_MAX_CLIENTS=500
+REDIS_SLOWLOG_LOG_SLOWER_THAN=10000
+REDIS_SLOWLOG_MAX_LEN=128
+MEMCACHED_MEMORY_MB=64
+MEMCACHED_MAX_CONNECTIONS=512
+MEMCACHED_THREADS=2
+SETTINGS
+    ;;
+  balanced)
+    apply_resource_settings "${target_env_file}" <<'SETTINGS'
+RESOURCE_PROFILE=balanced
+WEB_MEMORY_LIMIT=512m
+WEB_CPUS=1.0
+WEB_PIDS_LIMIT=256
+PHP_CONTAINER_MEMORY_LIMIT=1g
+PHP_CPUS=2.0
+PHP_PIDS_LIMIT=512
+PHP_MEMORY_LIMIT=256M
+PHP_MAX_EXECUTION_TIME=300
+PHP_MAX_INPUT_TIME=300
+PHP_POST_MAX_SIZE=256M
+PHP_UPLOAD_MAX_FILESIZE=256M
+PHP_REALPATH_CACHE_SIZE=4M
+PHP_REALPATH_CACHE_TTL=120
+PHP_OPCACHE_MEMORY_CONSUMPTION=192
+PHP_OPCACHE_MAX_ACCELERATED_FILES=100000
+PHP_OPCACHE_REVALIDATE_FREQ=2
+PHP_FPM_MAX_CHILDREN=3
+PHP_FPM_START_SERVERS=2
+PHP_FPM_MIN_SPARE_SERVERS=1
+PHP_FPM_MAX_SPARE_SERVERS=2
+PHP_FPM_MAX_REQUESTS=1000
+PHP_FPM_REQUEST_TERMINATE_TIMEOUT=300s
+PHP_FPM_REQUEST_SLOWLOG_TIMEOUT=10s
+DATABASE_MEMORY_LIMIT=2g
+DATABASE_CPUS=2.0
+DATABASE_PIDS_LIMIT=512
+MYSQL_MAX_CONNECTIONS=150
+MYSQL_MAX_ALLOWED_PACKET=256M
+MYSQL_TABLE_OPEN_CACHE=2048
+MYSQL_THREAD_CACHE_SIZE=32
+MYSQL_TMP_TABLE_SIZE=64M
+MYSQL_MAX_HEAP_TABLE_SIZE=64M
+MYSQL_INNODB_BUFFER_POOL_SIZE=1G
+MYSQL_LONG_QUERY_TIME=2
+RUNTIME_MEMORY_LIMIT=1g
+RUNTIME_CPUS=2.0
+RUNTIME_PIDS_LIMIT=512
+NODE_OPTIONS=--max-old-space-size=768
+CATALINA_OPTS=-Xms256m -Xmx512m
+AUXILIARY_MEMORY_LIMIT=512m
+AUXILIARY_CPUS=1.0
+AUXILIARY_PIDS_LIMIT=256
+REDIS_MAXMEMORY=384mb
+REDIS_MAXMEMORY_POLICY=noeviction
+REDIS_MAX_CLIENTS=1000
+REDIS_SLOWLOG_LOG_SLOWER_THAN=10000
+REDIS_SLOWLOG_MAX_LEN=128
+MEMCACHED_MEMORY_MB=128
+MEMCACHED_MAX_CONNECTIONS=1024
+MEMCACHED_THREADS=4
+SETTINGS
+    ;;
+  large)
+    apply_resource_settings "${target_env_file}" <<'SETTINGS'
+RESOURCE_PROFILE=large
+WEB_MEMORY_LIMIT=1g
+WEB_CPUS=2.0
+WEB_PIDS_LIMIT=512
+PHP_CONTAINER_MEMORY_LIMIT=2g
+PHP_CPUS=4.0
+PHP_PIDS_LIMIT=1024
+PHP_MEMORY_LIMIT=256M
+PHP_MAX_EXECUTION_TIME=300
+PHP_MAX_INPUT_TIME=300
+PHP_POST_MAX_SIZE=512M
+PHP_UPLOAD_MAX_FILESIZE=512M
+PHP_REALPATH_CACHE_SIZE=4M
+PHP_REALPATH_CACHE_TTL=120
+PHP_OPCACHE_MEMORY_CONSUMPTION=256
+PHP_OPCACHE_MAX_ACCELERATED_FILES=100000
+PHP_OPCACHE_REVALIDATE_FREQ=2
+PHP_FPM_MAX_CHILDREN=6
+PHP_FPM_START_SERVERS=3
+PHP_FPM_MIN_SPARE_SERVERS=2
+PHP_FPM_MAX_SPARE_SERVERS=4
+PHP_FPM_MAX_REQUESTS=1000
+PHP_FPM_REQUEST_TERMINATE_TIMEOUT=300s
+PHP_FPM_REQUEST_SLOWLOG_TIMEOUT=10s
+DATABASE_MEMORY_LIMIT=4g
+DATABASE_CPUS=4.0
+DATABASE_PIDS_LIMIT=1024
+MYSQL_MAX_CONNECTIONS=300
+MYSQL_MAX_ALLOWED_PACKET=512M
+MYSQL_TABLE_OPEN_CACHE=4096
+MYSQL_THREAD_CACHE_SIZE=64
+MYSQL_TMP_TABLE_SIZE=128M
+MYSQL_MAX_HEAP_TABLE_SIZE=128M
+MYSQL_INNODB_BUFFER_POOL_SIZE=2G
+MYSQL_LONG_QUERY_TIME=2
+RUNTIME_MEMORY_LIMIT=2g
+RUNTIME_CPUS=4.0
+RUNTIME_PIDS_LIMIT=1024
+NODE_OPTIONS=--max-old-space-size=1536
+CATALINA_OPTS=-Xms512m -Xmx1536m
+AUXILIARY_MEMORY_LIMIT=1g
+AUXILIARY_CPUS=2.0
+AUXILIARY_PIDS_LIMIT=512
+REDIS_MAXMEMORY=768mb
+REDIS_MAXMEMORY_POLICY=noeviction
+REDIS_MAX_CLIENTS=2000
+REDIS_SLOWLOG_LOG_SLOWER_THAN=10000
+REDIS_SLOWLOG_MAX_LEN=128
+MEMCACHED_MEMORY_MB=256
+MEMCACHED_MAX_CONNECTIONS=2048
+MEMCACHED_THREADS=8
+SETTINGS
+    ;;
+  custom) ;;
+  esac
+}
+
+sync_resource_profile() {
+  local profile
+
+  profile="$(env_get "${ENV_FILE}" RESOURCE_PROFILE balanced)"
+  validate_resource_profile "${profile}"
+  [[ "${profile}" != "custom" ]] || return 0
+  apply_resource_profile "${profile}" "${ENV_FILE}" ||
+    fail "Could not apply resource profile: ${profile}"
 }
 
 absolute_path() {
@@ -209,6 +462,7 @@ run_compose() {
 require_env_file() {
   [[ -f "${ENV_FILE}" ]] ||
     fail "Environment file not found: ${ENV_FILE}. Run './oneinstack init' first."
+  sync_resource_profile
   validate_managed_data_dir
   ensure_secret_files
 }
@@ -725,6 +979,7 @@ doctor() {
   fi
 
   if [[ -f "${ENV_FILE}" ]]; then
+    sync_resource_profile
     log "Environment: ${ENV_FILE}"
     if [[ -f "$(data_dir)/.oneinstack-managed" ]]; then
       log "Host data directory: $(data_dir)"
@@ -1011,7 +1266,10 @@ configure_stack() {
   local database_version=""
   local version_key=""
   local php_version=""
+  local resource_profile=""
   local php_extensions=""
+  local selected_php_version=""
+  local selected_php_extensions=""
   local enable_features=""
   local disable_features=""
   local redis_version=""
@@ -1043,6 +1301,7 @@ configure_stack() {
 
   while (($# > 0)); do
     case "$1" in
+      --resource-profile) resource_profile="${2:?--resource-profile requires a value}"; shift 2 ;;
       --web) web="${2:?--web requires a value}"; shift 2 ;;
       --db | --database) database_spec="${2:?--db requires ENGINE[:VERSION]}"; shift 2 ;;
       --php) php_version="${2:?--php requires a version}"; shift 2 ;;
@@ -1069,6 +1328,12 @@ configure_stack() {
     esac
   done
 
+  if [[ -n "${resource_profile}" ]]; then
+    validate_resource_profile "${resource_profile}"
+    env_set "${ENV_FILE}" RESOURCE_PROFILE "${resource_profile}"
+    apply_resource_profile "${resource_profile}"
+  fi
+
   if [[ -n "${web}" ]]; then
     [[ "${web}" =~ ^(nginx|tengine|openresty|caddy|apache|npm|none)$ ]] ||
       fail "Web engine must be nginx, tengine, openresty, caddy, apache, npm or none."
@@ -1094,6 +1359,14 @@ configure_stack() {
       version_key="$(database_version_key "${database}")"
       validate_database_version "${database}" "$(env_get "${ENV_FILE}" "${version_key}")"
     fi
+    if [[ "${database}" == "postgresql" ]]; then
+      database_version="$(env_get "${ENV_FILE}" POSTGRES_VERSION)"
+      case "${database_version}" in
+        latest) env_set "${ENV_FILE}" POSTGRES_BASE_IMAGE postgres:alpine ;;
+        *-*) env_set "${ENV_FILE}" POSTGRES_BASE_IMAGE "postgres:${database_version}" ;;
+        *) env_set "${ENV_FILE}" POSTGRES_BASE_IMAGE "postgres:${database_version}-alpine" ;;
+      esac
+    fi
     env_set "${ENV_FILE}" DATABASE_ENGINE "${database}"
     case "${database}" in
       mysql | mariadb | percona)
@@ -1118,12 +1391,6 @@ configure_stack() {
   if [[ -n "${php_version}" ]]; then
     validate_primary_php_version "${php_version}"
     env_set "${ENV_FILE}" PHP_VERSION "${php_version}"
-    env_set "${ENV_FILE}" PHP_VARIANT fpm-bookworm
-    if [[ "${php_version}" == "latest" ]]; then
-      env_set "${ENV_FILE}" PHP_BASE_IMAGE php:fpm-bookworm
-    else
-      env_set "${ENV_FILE}" PHP_BASE_IMAGE ""
-    fi
   fi
 
   if [[ -n "${php_extensions}" ]]; then
@@ -1131,6 +1398,26 @@ configure_stack() {
       fail "PHP extensions must be a comma-separated lowercase list."
     validate_php_extensions "${php_extensions}"
     env_set "${ENV_FILE}" PHP_EXTENSIONS "${php_extensions}"
+  fi
+
+  if [[ -n "${php_version}" || -n "${php_extensions}" ]]; then
+    selected_php_version="$(env_get "${ENV_FILE}" PHP_VERSION)"
+    selected_php_extensions="$(env_get "${ENV_FILE}" PHP_EXTENSIONS)"
+    if [[ ",${selected_php_extensions}," == *,sqlsrv,* ]]; then
+      env_set "${ENV_FILE}" PHP_VARIANT fpm-bookworm
+      if [[ "${selected_php_version}" == "latest" ]]; then
+        env_set "${ENV_FILE}" PHP_BASE_IMAGE php:fpm-bookworm
+      else
+        env_set "${ENV_FILE}" PHP_BASE_IMAGE ""
+      fi
+    else
+      env_set "${ENV_FILE}" PHP_VARIANT fpm-alpine
+      if [[ "${selected_php_version}" == "latest" ]]; then
+        env_set "${ENV_FILE}" PHP_BASE_IMAGE php:fpm-alpine
+      else
+        env_set "${ENV_FILE}" PHP_BASE_IMAGE ""
+      fi
+    fi
   fi
 
   if ((extra_pecl_packages_set == 1)); then
@@ -1237,7 +1524,7 @@ configure_stack() {
       fail "Node.js version must be a major number or latest."
     env_set "${ENV_FILE}" NODE_VERSION "${node_version}"
     if [[ "${node_version}" == "latest" ]]; then
-      env_set "${ENV_FILE}" NODE_BASE_IMAGE node:bookworm-slim
+      env_set "${ENV_FILE}" NODE_BASE_IMAGE node:alpine
     else
       env_set "${ENV_FILE}" NODE_BASE_IMAGE ""
     fi
@@ -1588,6 +1875,7 @@ show_selected_config() {
   [[ -n "${extra_pecl}" ]] || extra_pecl="none"
 
   printf 'Web:              %s\n' "$(selected_web_service)"
+  printf 'Resources:        %s\n' "$(env_get "${ENV_FILE}" RESOURCE_PROFILE balanced)"
   printf 'Database:         %s (%s:%s)\n' \
     "${database_label}" \
     "$(env_get "${ENV_FILE}" DATABASE_HOST -)" \

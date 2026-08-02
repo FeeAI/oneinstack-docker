@@ -1,5 +1,6 @@
 ARG POSTGRES_VERSION=18
-FROM postgres:${POSTGRES_VERSION}
+ARG POSTGRES_BASE_IMAGE=postgres:${POSTGRES_VERSION}-alpine
+FROM ${POSTGRES_BASE_IMAGE}
 
 LABEL org.opencontainers.image.title="OneinStack PostgreSQL"
 LABEL org.opencontainers.image.source="https://github.com/FeeAI/oneinstack"

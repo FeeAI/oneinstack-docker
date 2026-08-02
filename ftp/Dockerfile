@@ -1,4 +1,4 @@
-FROM alpine:3.22
+FROM alpine:3.24
 
 ARG APP_UID=1000
 ARG APP_GID=1000
