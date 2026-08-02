@@ -195,6 +195,9 @@ RUBY
 fi
 
 [[ -f "${DOCKER_DIR}/tomcat/Dockerfile" ]]
+grep -Fq 'ENTRYPOINT ["oneinstack-secrets-entrypoint"]' \
+  "${DOCKER_DIR}/tomcat/Dockerfile"
+grep -Fq 'CMD ["catalina.sh", "run"]' "${DOCKER_DIR}/tomcat/Dockerfile"
 [[ -f "${DOCKER_DIR}/apisix/Dockerfile" ]]
 grep -Fq "key: \${{APISIX_ADMIN_KEY}}" "${DOCKER_DIR}/apisix/config.yaml"
 grep -Fq 'http://apisix-etcd:2379' "${DOCKER_DIR}/apisix/config.yaml"

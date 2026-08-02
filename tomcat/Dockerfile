@@ -18,3 +18,4 @@ RUN chmod 0755 /usr/local/bin/oneinstack-secrets-entrypoint
 EXPOSE 8080
 
 ENTRYPOINT ["oneinstack-secrets-entrypoint"]
+CMD ["catalina.sh", "run"]
